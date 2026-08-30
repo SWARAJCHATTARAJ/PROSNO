@@ -10,7 +10,8 @@ public class BackendApplication {
 
 	public static void main(String[] args) {
 		try {
-			Dotenv dotenv = Dotenv.configure().directory("../").ignoreIfMissing().load();
+			String envDir = new java.io.File(".env").exists() ? "./" : "../";
+			Dotenv dotenv = Dotenv.configure().directory(envDir).ignoreIfMissing().load();
 			dotenv.entries().forEach(entry -> System.setProperty(entry.getKey(), entry.getValue()));
 		} catch (Exception e) {
 			// fallback if anything goes wrong
