@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2, RefreshCw, RotateCw, TriangleAlert } from "lucide-react";
 
-import { api, type IndexStatus, type Repository } from "@/lib/api";
+import { api, type IndexStatus, type Repository, type IndexTriggerResponse, ApiError } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
 import {
   Card,
   CardContent,
@@ -61,11 +62,47 @@ export function RepoDashboard() {
         ? 3_000
         : false,
   });
+
+  const handleOutcome = (data: IndexTriggerResponse) => {
+    queryClient.setQueryData(queryKeys.repos.list(), (old: Repository[] | undefined) => {
+      if (!old) return old;
+      return old.map(r => r.id === data.repository.id ? data.repository : r);
+    });
+    
+    if (data.outcome === "STARTED_INDEXING") {
+      toast({ type: "success", title: "Indexing started" });
+    } else if (data.outcome === "ALREADY_UP_TO_DATE") {
+      toast({ type: "info", title: "Already up to date — no changes found" });
+    } else if (data.outcome === "ALREADY_IN_PROGRESS") {
+      toast({ type: "info", title: "Already indexing — hang tight" });
+    }
+  };
+
+  const handleError = (error: unknown) => {
+    if (error instanceof ApiError && error.status === 429) {
+      const hours = error.retryAfter ? Math.ceil(error.retryAfter / 3600) : 24;
+      toast({ type: "warning", title: `Rate limit reached — try again in ${hours} hour${hours !== 1 ? 's' : ''}` });
+    } else {
+      toast({ type: "error", title: "Failed to start indexing" });
+    }
+  };
+
   const indexRepository = useMutation({
     mutationFn: api.startIndex,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.repos.all });
-    },
+    onSuccess: handleOutcome,
+    onError: handleError,
+    onSettled: () => {
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: queryKeys.repos.list() }), 1000);
+    }
+  });
+
+  const refreshRepository = useMutation({
+    mutationFn: api.refreshIndex,
+    onSuccess: handleOutcome,
+    onError: handleError,
+    onSettled: () => {
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: queryKeys.repos.list() }), 1000);
+    }
   });
 
   const isRefreshing = repositories.isFetching && !repositories.isLoading;
@@ -133,7 +170,9 @@ export function RepoDashboard() {
               key={repository.id}
               repository={repository}
               isIndexing={indexRepository.isPending && indexRepository.variables === repository.id}
+              isRefreshing={refreshRepository.isPending && refreshRepository.variables === repository.id}
               onIndex={() => indexRepository.mutate(repository.id)}
+              onRefresh={() => refreshRepository.mutate(repository.id)}
             />
           ))}
         </div>
@@ -145,15 +184,18 @@ export function RepoDashboard() {
 function RepositoryCard({
   repository,
   isIndexing,
+  isRefreshing,
   onIndex,
+  onRefresh,
 }: {
   repository: Repository;
   isIndexing: boolean;
+  isRefreshing: boolean;
   onIndex: () => void;
+  onRefresh: () => void;
 }) {
   const progress = indexingProgress(repository);
   const indexing = repository.indexStatus === "INDEXING";
-  const canIndex = repository.indexStatus !== "INDEXING";
 
   return (
     <Card className="border border-border dark:border-white/10 bg-muted/30 dark:bg-[#0f0f0f] shadow-none rounded-sm flex flex-col transition-colors hover:border-border dark:border-white/20 hover:bg-muted/40 dark:bg-[#121212]">
@@ -205,11 +247,16 @@ function RepositoryCard({
               "rounded-sm font-mono text-xs border border-border dark:border-white/10 hover:bg-black/5 dark:bg-white/5 text-foreground/90 dark:text-neutral-300 focus-visible:ring-1 focus-visible:ring-white/20 focus-visible:ring-offset-1 focus-visible:ring-offset-[#0a0a0a]",
               repository.indexStatus === "READY" ? "flex-1 bg-transparent" : "w-full bg-muted dark:bg-[#1a1a1a]"
             )}
-            onClick={onIndex}
-            disabled={!canIndex || isIndexing}
+            onClick={repository.indexStatus === "READY" ? onRefresh : onIndex}
+            disabled={repository.indexStatus === "INDEXING" || isIndexing || isRefreshing}
           >
-            {isIndexing || indexing ? <Spinner className="text-primary dark:text-amber-500" /> : <RotateCw className="size-3.5 mr-2" />}
-            {repository.indexStatus === "READY" ? "rebuild()" : "make install"}
+            {isIndexing || isRefreshing || indexing ? (
+              <Spinner className="text-primary dark:text-amber-500" />
+            ) : repository.indexStatus === "READY" ? (
+              <><RefreshCw className="size-3.5 mr-2" />rebuild()</>
+            ) : (
+              <><RotateCw className="size-3.5 mr-2" />make install</>
+            )}
           </Button>
         </div>
       </CardContent>

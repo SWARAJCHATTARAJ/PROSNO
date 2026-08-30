@@ -19,9 +19,10 @@ import prosno.backend.exceptions.BadRequestException;
 import prosno.backend.exceptions.NotFoundException;
 import prosno.backend.repository.RepositoryRepository;
 import prosno.backend.services.UserService;
+import prosno.backend.services.RateLimitingService;
 import prosno.backend.services.ai.RagSettings;
 import prosno.backend.services.github.GithubApiClient;
-import jakarta.transaction.Transactional;
+import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,24 +40,53 @@ public class IndexingService {
     private final CodeChunker codeChunker;
     private final VectorStore vectorStore;
 
+    private final RateLimitingService rateLimitingService;
+
     @Value("${app.indexing.max-file-bytes:102400}")
     private long maxFileBytes;
 
-    public Repository startIndexing(UUID repoId, UUID userId) {
+    @Transactional(rollbackFor = prosno.backend.exceptions.RateLimitExceededException.class)
+    public String tryStartIndexing(UUID repoId, UUID userId) {
         Repository repo = repositoryRepository.findByIdAndUserId(repoId, userId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
 
         if (repo.getIndexStatus() == IndexStatus.INDEXING) {
-            throw new BadRequestException("Repository is already being indexed");
+            return "ALREADY_IN_PROGRESS"; // Fast path: already indexing
+        }
+        
+        if (repo.getIndexStatus() == IndexStatus.READY) {
+            String token = userService.decryptAccessToken(userService.requiredById(userId));
+            String latestSha = gitHubApiClient.getLatestCommitSha(token, repo.getOwner(), repo.getName(), repo.getDefaultBranch());
+            if (latestSha != null && latestSha.equals(repo.getLastIndexedSha())) {
+                return "ALREADY_UP_TO_DATE"; // Fast path: already up to date
+            }
         }
 
-        repo.setIndexStatus(IndexStatus.INDEXING);
-        repo.setFilesProcessed(0);
-        repo.setFilesTotal(0);
-        repo.setChunkCount(0);
-        repo.setErrorMessage(null);
-        repo.setUpdatedAt(Instant.now());
-        return repositoryRepository.save(repo);
+        io.github.bucket4j.Bucket bucket = rateLimitingService.resolveBucket(userId);
+        
+        // Peek first: if no tokens, reject immediately without touching the DB
+        if (bucket.getAvailableTokens() <= 0) {
+            io.github.bucket4j.ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
+            throw new prosno.backend.exceptions.RateLimitExceededException(
+                    "You have reached your indexing limit. Please try again later.", 
+                    probe.getNanosToWaitForRefill() / 1_000_000_000L);
+        }
+
+        int updatedCount = repositoryRepository.tryStartJob(repoId, IndexStatus.INDEXING, IndexStatus.PENDING, IndexStatus.FAILED, IndexStatus.READY);
+        if (updatedCount > 0) {
+            // We won the lock, now actually consume the token!
+            io.github.bucket4j.ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
+            if (!probe.isConsumed()) {
+                // Highly unlikely edge case: token was consumed between peek and here by another thread for this user.
+                // Throwing this exception will rollback the DB update (since this method is @Transactional)
+                throw new prosno.backend.exceptions.RateLimitExceededException(
+                        "You have reached your indexing limit. Please try again later.", 
+                        probe.getNanosToWaitForRefill() / 1_000_000_000L);
+            }
+            return "STARTED_INDEXING";
+        }
+        
+        return "ALREADY_IN_PROGRESS";
     }
 
     @Async("indexingExecutor")
@@ -73,6 +103,8 @@ public class IndexingService {
         Repository repo = repositoryRepository.findById(repoId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
         String token = userService.decryptAccessToken(userService.requiredById(userId));
+        
+        String targetSha = gitHubApiClient.getLatestCommitSha(token, repo.getOwner(), repo.getName(), repo.getDefaultBranch());
 
         deleteExistingVectors(repoId.toString());
 
@@ -181,7 +213,7 @@ public class IndexingService {
             }
         }
 
-        markReady(repoId, totalFiles, processed, totalChunks, repo.getFullName());
+        markReady(repoId, totalFiles, processed, totalChunks, repo.getFullName(), targetSha);
     }
 
     private void deleteExistingVectors(String repoId) {
@@ -213,13 +245,14 @@ public class IndexingService {
     }
 
     @Transactional
-    protected void markReady(UUID repoId, int totalFiles, int processedFiles, int totalChunks, String fullName) {
+    protected void markReady(UUID repoId, int totalFiles, int processedFiles, int totalChunks, String fullName, String targetSha) {
         repositoryRepository.findById(repoId).ifPresent(repo -> {
             repo.setIndexStatus(IndexStatus.READY);
             repo.setFilesTotal(totalFiles);
             repo.setFilesProcessed(processedFiles);
             repo.setChunkCount(totalChunks);
             repo.setIndexedAt(Instant.now());
+            repo.setLastIndexedSha(targetSha);
             repo.setErrorMessage(null);
             repo.setUpdatedAt(Instant.now());
             repositoryRepository.save(repo);

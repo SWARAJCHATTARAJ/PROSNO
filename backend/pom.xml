@@ -102,6 +102,11 @@
 			<artifactId>dotenv-java</artifactId>
 			<version>3.0.0</version>
 		</dependency>
+		<dependency>
+			<groupId>com.bucket4j</groupId>
+			<artifactId>bucket4j-core</artifactId>
+			<version>8.10.1</version>
+		</dependency>
 	</dependencies>
 	<dependencyManagement>
 		<dependencies>

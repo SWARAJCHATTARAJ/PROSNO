@@ -37,6 +37,17 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.BAD_REQUEST, message);
     }
 
+    @ExceptionHandler(RateLimitExceededException.class)
+    ResponseEntity<Map<String, Object>> handleRateLimit(RateLimitExceededException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", String.valueOf(ex.getRetryAfterSeconds()))
+                .body(Map.of(
+                        "status", HttpStatus.TOO_MANY_REQUESTS.value(),
+                        "error", HttpStatus.TOO_MANY_REQUESTS.getReasonPhrase(),
+                        "message", ex.getMessage(),
+                        "timestamp", Instant.now().toString()));
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
         return error(HttpStatus.INTERNAL_SERVER_ERROR, ex.getMessage() != null ? ex.getMessage() : "Unexpected error");

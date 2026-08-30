@@ -23,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class RepoService {
     private final RepositoryRepository repositoryRepository;
+    private final prosno.backend.repository.UserRepositoryRepository userRepositoryRepository;
     private final UserService userService;
     private final GithubApiClient gitHubApiClient;
 
@@ -37,13 +38,12 @@ public class RepoService {
         for (Map<String, Object> remote : remoteRepos) {
             Long githubRepoId = toLong(remote.get("id"));
             Repository repo = repositoryRepository
-                    .findByUserIdAndGithubRepoId(userId, githubRepoId)
+                    .findByGithubRepoId(githubRepoId)
                     .orElseGet(Repository::new);
 
             String fullName = String.valueOf(remote.get("full_name"));
             String[] parts = fullName.split("/", 2);
 
-            repo.setUserId(userId);
             repo.setGithubRepoId(githubRepoId);
             repo.setOwner(parts.length > 0 ? parts[0] : String.valueOf(remote.get("owner")));
             repo.setName(parts.length > 1 ? parts[1] : String.valueOf(remote.get("name")));
@@ -62,7 +62,17 @@ public class RepoService {
                     repo.setOwner(String.valueOf(ownerMap.get("login")));
                 }
             }
-            saved.add(repositoryRepository.save(repo));
+            Repository savedRepo = repositoryRepository.save(repo);
+            saved.add(savedRepo);
+            
+            if (!userRepositoryRepository.existsByUserIdAndRepoId(userId, savedRepo.getId())) {
+                userRepositoryRepository.save(
+                    prosno.backend.entity.UserRepository.builder()
+                        .userId(userId)
+                        .repoId(savedRepo.getId())
+                        .build()
+                );
+            }
         }
 
         return saved.stream()

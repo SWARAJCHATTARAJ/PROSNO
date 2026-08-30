@@ -98,6 +98,18 @@ public class GithubApiClient {
                 });
     }
 
+    public String getLatestCommitSha(String accessToken, String owner, String repo, String branch) {
+        Map<String, Object> body = client(accessToken)
+                .get()
+                .uri("/repos/{owner}/{repo}/commits/{branch}", owner, repo, branch)
+                .retrieve()
+                .body(MAP);
+        if (body != null && body.containsKey("sha")) {
+            return String.valueOf(body.get("sha"));
+        }
+        return null;
+    }
+
     private RestClient client(String accessToken) {
         return restClientBuilder.clone()
                 .baseUrl(API_BASE)

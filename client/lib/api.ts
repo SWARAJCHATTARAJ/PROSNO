@@ -37,6 +37,13 @@ export type IndexStatusResponse = {
   errorMessage: string | null;
 };
 
+export type IndexOutcome = "STARTED_INDEXING" | "ALREADY_UP_TO_DATE" | "ALREADY_IN_PROGRESS";
+
+export type IndexTriggerResponse = {
+  repository: Repository;
+  outcome: IndexOutcome;
+};
+
 export type ChatSession = {
   id: string;
   repositoryId: string;
@@ -62,10 +69,12 @@ export type ChatMessage = {
 
 export class ApiError extends Error {
   status: number;
+  retryAfter?: number;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, retryAfter?: number) {
     super(message);
     this.status = status;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -77,13 +86,18 @@ export function getGithubLoginUrl() {
   return `${getApiBaseUrl()}/oauth2/authorization/github`;
 }
 
-async function parseError(res: Response): Promise<string> {
+async function parseError(res: Response): Promise<{message: string, retryAfter?: number}> {
+  let message = res.statusText || "Request failed";
   try {
     const data = await res.json();
-    return data.message ?? data.error ?? res.statusText;
-  } catch {
-    return res.statusText || "Request failed";
+    message = data.message ?? data.error ?? res.statusText;
+  } catch {}
+  
+  let retryAfter = undefined;
+  if (res.headers.has("Retry-After")) {
+    retryAfter = parseInt(res.headers.get("Retry-After")!, 10);
   }
+  return { message, retryAfter };
 }
 
 export function getCsrfToken() {
@@ -108,7 +122,8 @@ export async function apiFetch<T>(
   });
 
   if (!res.ok) {
-    throw new ApiError(res.status, await parseError(res));
+    const parsed = await parseError(res);
+    throw new ApiError(res.status, parsed.message, parsed.retryAfter);
   }
 
   if (res.status === 204) {
@@ -129,7 +144,9 @@ export const api = {
     apiFetch<Repository[]>(`/api/repos?refresh=${refresh}`),
   getRepo: (id: string) => apiFetch<Repository>(`/api/repos/${id}`),
   startIndex: (id: string) =>
-    apiFetch<Repository>(`/api/repos/${id}/index`, { method: "POST" }),
+    apiFetch<IndexTriggerResponse>(`/api/repos/${id}/index`, { method: "POST" }),
+  refreshIndex: (id: string) =>
+    apiFetch<IndexTriggerResponse>(`/api/repos/${id}/refresh`, { method: "POST" }),
   indexStatus: (id: string) =>
     apiFetch<IndexStatusResponse>(`/api/repos/${id}/status`),
    createSession: (repositoryId: string, title?: string) =>

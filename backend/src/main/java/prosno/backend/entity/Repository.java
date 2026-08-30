@@ -20,7 +20,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "repositories", uniqueConstraints = @UniqueConstraint(columnNames = { "user_id", "github_repo_id" }))
+@Table(name = "repositories", uniqueConstraints = @UniqueConstraint(columnNames = { "github_repo_id" }))
 @Getter
 @Setter
 @AllArgsConstructor
@@ -30,9 +30,6 @@ public class Repository {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
-
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
 
     @Column(name = "github_repo_id", nullable = false)
     private Long githubRepoId;
@@ -68,6 +65,9 @@ public class Repository {
 
     @Column(name = "indexed_at")
     private Instant indexedAt;
+
+    @Column(name = "last_indexed_sha", length = 40)
+    private String lastIndexedSha;
 
     @Column(name = "chunk_count", nullable = false)
     @Builder.Default

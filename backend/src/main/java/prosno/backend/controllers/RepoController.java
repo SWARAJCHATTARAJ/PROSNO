@@ -47,11 +47,26 @@ public class RepoController {
     }
 
     @PostMapping("/{id}/index")
-    public ResponseEntity<RepositoryResponse> index(@PathVariable UUID id) {
+    public ResponseEntity<prosno.backend.dto.IndexTriggerResponse> index(@PathVariable UUID id) {
+        return handleIndexOrRefresh(id);
+    }
+
+    @PostMapping("/{id}/refresh")
+    public ResponseEntity<prosno.backend.dto.IndexTriggerResponse> refresh(@PathVariable UUID id) {
+        return handleIndexOrRefresh(id);
+    }
+
+    private ResponseEntity<prosno.backend.dto.IndexTriggerResponse> handleIndexOrRefresh(UUID id) {
         UUID userId = currentUser.require().getId();
-        Repository repo = indexingService.startIndexing(id, userId);
-        indexingService.indexAsync(id, userId);
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(repoService.toResponse(repo));
+        String outcome = indexingService.tryStartIndexing(id, userId);
+        
+        if ("STARTED_INDEXING".equals(outcome)) {
+            indexingService.indexAsync(id, userId);
+        }
+        
+        Repository repo = repoService.requireOwned(id, userId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+            .body(new prosno.backend.dto.IndexTriggerResponse(repoService.toResponse(repo), outcome));
     }
 
     @GetMapping("/{id}/status")
