@@ -25,6 +25,8 @@ import prosno.backend.services.ai.CitationMapper;
 import prosno.backend.services.ai.CodeContextRetriever;
 import lombok.RequiredArgsConstructor;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Chat sessions and the RAG chat pipeline entry point.
  *
@@ -36,11 +38,13 @@ import lombok.RequiredArgsConstructor;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ChatService {
 
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final RepoService repoService;
+    private final prosno.backend.services.indexing.IndexingService indexingService;
     private final CodeContextRetriever codeContextRetriever;
     private final ChatPromptBuilder chatPromptBuilder;
     private final ChatStreamHandler chatStreamHandler;
@@ -49,7 +53,7 @@ public class ChatService {
     @Transactional
     public ChatSessionResponse createSession(UUID userId, CreateChatSessionRequest request) {
         Repository repo = repoService.requireOwned(request.repositoryId(), userId);
-        if (repo.getIndexStatus() != IndexStatus.READY) {
+        if (repo.getIndexStatus() != IndexStatus.READY && repo.getIndexStatus() != IndexStatus.EXPIRED) {
             throw new BadRequestException("Repository must be indexed before chatting");
         }
 
@@ -94,10 +98,74 @@ public class ChatService {
         // 1. Ensure the session exists and the repo is indexed
         ChatSession session = requireSession(userId, sessionId);
         Repository repo = repoService.requireOwned(session.getRepositoryId(), userId);
+        
+        // Touch lastAccessedAt to prevent cleanup
+        repoService.updateLastAccessedAt(repo.getId());
+
+        if (repo.getIndexStatus() == IndexStatus.EXPIRED) {
+            // Trigger soft-wakeup
+            String outcome = indexingService.tryStartIndexing(repo.getId(), userId);
+            if ("STARTED_INDEXING".equals(outcome)) {
+                indexingService.indexAsync(repo.getId(), userId);
+            }
+            
+            SseEmitter emitter = new SseEmitter(1000L * 60 * 10); // 10 minute timeout for wakeup
+            new Thread(() -> {
+                try {
+                    // Poll until READY
+                    Repository r = repo;
+                    long startTime = System.currentTimeMillis();
+                    long maxWaitTime = 2 * 60 * 1000L; // 2 minutes
+
+                    while (r.getIndexStatus() == IndexStatus.INDEXING || r.getIndexStatus() == IndexStatus.EXPIRED || r.getIndexStatus() == IndexStatus.PENDING) {
+                        if (System.currentTimeMillis() - startTime > maxWaitTime) {
+                            log.error("Repository {} stuck in {} for too long during chat wakeup", r.getFullName(), r.getIndexStatus());
+                            sendErrorEventAndComplete(emitter, "Wake up timeout. Please try again or refresh from the dashboard.");
+                            return;
+                        }
+                        try {
+                            emitter.send(SseEmitter.event()
+                                    .name("status")
+                                    .data("{\"type\": \"status\", \"message\": \"Waking up repository...\"}"));
+                        } catch (Exception ex) {
+                            // Client might have disconnected
+                            return;
+                        }
+                        Thread.sleep(2000);
+                        r = repoService.requireOwned(r.getId(), userId);
+                    }
+
+                    if (r.getIndexStatus() == IndexStatus.FAILED) {
+                        log.error("Failed to index repository {} during chat wakeup: {}", r.getFullName(), r.getErrorMessage());
+                        sendErrorEventAndComplete(emitter, "Failed to reload this repository. Please try refreshing it from the dashboard.");
+                        return;
+                    }
+
+                    if (r.getIndexStatus() != IndexStatus.READY) {
+                        log.error("Unexpected index status {} for repository {} during chat wakeup", r.getIndexStatus(), r.getFullName());
+                        sendErrorEventAndComplete(emitter, "Failed to wake up repository. Please try indexing manually.");
+                        return;
+                    }
+
+                    // proceed with RAG now that it's awake
+                    proceedWithRag(emitter, session, r, userContent, userId);
+                } catch (Exception e) {
+                    emitter.completeWithError(e);
+                }
+            }).start();
+            return emitter;
+        }
+
         if (repo.getIndexStatus() != IndexStatus.READY) {
             throw new BadRequestException("Repository is not ready for chat");
         }
 
+        SseEmitter emitter = new SseEmitter(prosno.backend.services.ai.RagSettings.STREAM_TIMEOUT_MS);
+        proceedWithRag(emitter, session, repo, userContent, userId);
+        return emitter;
+    }
+
+    private void proceedWithRag(SseEmitter emitter, ChatSession session, Repository repo, String userContent, UUID userId) {
         // 2. Persist the user's message
         ChatMessage userMessage = chatMessageRepository.save(ChatMessage.builder()
                 .sessionId(session.getId())
@@ -113,7 +181,9 @@ public class ChatService {
         String userPrompt = chatPromptBuilder.userPrompt(retrievedContext.contextText(), userContent);
 
         // 5. Stream OpenAI response to the client (SSE)
-        return chatStreamHandler.stream(
+        // We bypass chatStreamHandler's return since we already have the emitter
+        chatStreamHandler.streamWithExistingEmitter(
+                emitter,
                 session.getId(),
                 toMessageResponse(userMessage),
                 retrievedContext.citations(),
@@ -136,5 +206,17 @@ public class ChatService {
                 message.getContent(),
                 citationMapper.fromJson(message.getCitations()),
                 message.getCreatedAt());
+    }
+
+    private void sendErrorEventAndComplete(SseEmitter emitter, String message) {
+        try {
+            // Escape quotes in message if necessary, assuming message doesn't have raw quotes
+            emitter.send(SseEmitter.event()
+                    .name("error")
+                    .data("{\"type\": \"error\", \"message\": \"" + message + "\"}"));
+            emitter.complete();
+        } catch (Exception ex) {
+            emitter.completeWithError(ex);
+        }
     }
 }

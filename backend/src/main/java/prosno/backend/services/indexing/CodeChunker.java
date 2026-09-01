@@ -16,11 +16,15 @@ public class CodeChunker {
     private final CodeFileFilter fileFilter;
     private final int maxChars;
 
+    private final int overlapChars;
+
     public CodeChunker(
             @Value("${app.indexing.chunk-size:800}") int chunkSize,
+            @Value("${app.indexing.chunk-overlap:150}") int chunkOverlap,
             CodeFileFilter fileFilter) {
         // Chunk size here is approximate token count, so maxChars = tokens * 4
         this.maxChars = chunkSize * 4;
+        this.overlapChars = chunkOverlap * 4;
         this.fileFilter = fileFilter;
     }
 
@@ -32,7 +36,7 @@ public class CodeChunker {
         String language = fileFilter.detectLanguage(filePath);
         String header = "// File: " + filePath + "\n";
         
-        List<String> chunks = chunkCode(content, maxChars);
+        List<String> chunks = chunkCode(content, maxChars, overlapChars);
         
         return IntStream.range(0, chunks.size())
                 .mapToObj(i -> {
@@ -42,7 +46,7 @@ public class CodeChunker {
                 .toList();
     }
 
-    private static List<String> chunkCode(String code, int maxChars) {
+    private static List<String> chunkCode(String code, int maxChars, int overlapChars) {
         // Split by end of blocks `\n}` or double newlines (blank lines)
         String[] blocks = code.split("(?<=\\n\\})\\s*\\n|\\n\\s*\\n");
         List<String> chunks = new java.util.ArrayList<>();
@@ -50,8 +54,23 @@ public class CodeChunker {
 
         for (String block : blocks) {
             if (currentChunk.length() + block.length() > maxChars && !currentChunk.isEmpty()) {
-                chunks.add(currentChunk.toString().trim());
+                String completedChunk = currentChunk.toString().trim();
+                chunks.add(completedChunk);
+                
                 currentChunk.setLength(0);
+                if (overlapChars > 0) {
+                    String overlap = completedChunk;
+                    if (completedChunk.length() > overlapChars) {
+                        overlap = completedChunk.substring(completedChunk.length() - overlapChars);
+                        int firstNewline = overlap.indexOf('\n');
+                        if (firstNewline >= 0 && firstNewline < overlap.length() - 1) {
+                            overlap = overlap.substring(firstNewline + 1);
+                        }
+                    }
+                    if (!overlap.isEmpty()) {
+                        currentChunk.append(overlap).append("\n\n");
+                    }
+                }
             }
             
             if (block.length() > maxChars) {
@@ -59,8 +78,23 @@ public class CodeChunker {
                 String[] lines = block.split("\\n");
                 for (String line : lines) {
                     if (currentChunk.length() + line.length() > maxChars && !currentChunk.isEmpty()) {
-                        chunks.add(currentChunk.toString().trim());
+                        String completedChunk = currentChunk.toString().trim();
+                        chunks.add(completedChunk);
+                        
                         currentChunk.setLength(0);
+                        if (overlapChars > 0) {
+                            String overlap = completedChunk;
+                            if (completedChunk.length() > overlapChars) {
+                                overlap = completedChunk.substring(completedChunk.length() - overlapChars);
+                                int firstNewline = overlap.indexOf('\n');
+                                if (firstNewline >= 0 && firstNewline < overlap.length() - 1) {
+                                    overlap = overlap.substring(firstNewline + 1);
+                                }
+                            }
+                            if (!overlap.isEmpty()) {
+                                currentChunk.append(overlap).append("\n");
+                            }
+                        }
                     }
                     currentChunk.append(line).append("\n");
                 }

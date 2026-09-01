@@ -110,6 +110,20 @@ public class GithubApiClient {
         return null;
     }
 
+    public Map<String, Object> getRepo(String accessToken, String owner, String repo) {
+        return client(accessToken)
+                .get()
+                .uri("/repos/{owner}/{repo}", owner, repo)
+                .retrieve()
+                .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.NOT_FOUND), (req, res) -> {
+                    throw new prosno.backend.exceptions.NotFoundException("Repository not found or not accessible");
+                })
+                .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.FORBIDDEN), (req, res) -> {
+                    throw new prosno.backend.exceptions.ForbiddenException("Access to this repository is forbidden");
+                })
+                .body(MAP);
+    }
+
     private RestClient client(String accessToken) {
         return restClientBuilder.clone()
                 .baseUrl(API_BASE)

@@ -87,6 +87,12 @@ public class Repository {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(name = "expired_at")
+    private Instant expiredAt;
+
+    @Column(name = "last_accessed_at")
+    private Instant lastAccessedAt;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -97,6 +103,9 @@ public class Repository {
             createdAt = now;
         }
         updatedAt = now;
+        if (lastAccessedAt == null) {
+            lastAccessedAt = now;
+        }
         if (indexStatus == null) {
             indexStatus = IndexStatus.PENDING;
         }

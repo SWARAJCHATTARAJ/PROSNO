@@ -1,6 +1,7 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { FileCode2 } from "lucide-react";
+import { useWorkspace } from "@/components/layout/workspace-context";
 
 import { Badge } from "@/components/ui/badge";
 import type { Citation, Repository } from "@/lib/api";
@@ -24,29 +25,28 @@ export function CitationChips({
   repo: Repository;
   citations: Citation[];
 }) {
+  const { setSelectedCitation, setActiveCitations } = useWorkspace();
+
   if (!citations.length) return null;
 
   return (
-    <div className="flex flex-wrap gap-1.5 pt-1">
+    <div className="flex flex-wrap gap-1.5 pt-2">
       {citations.map((citation, index) => (
-        <Badge
+        <button
           key={`${citation.filePath}-${index}`}
-          variant="outline"
-          render={
-            <a
-              href={citationHref(repo, citation)}
-              target="_blank"
-              rel="noreferrer"
-            />
-          }
-          className="max-w-full gap-1 font-normal"
+          type="button"
+          onClick={() => {
+            setSelectedCitation(citation);
+            setActiveCitations(citations);
+          }}
+          className="inline-flex items-center gap-1.5 max-w-full px-2 py-0.5 rounded border border-border bg-card text-[10px] font-mono text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors"
         >
+          <FileCode2 className="size-3 opacity-70" />
           <span className="truncate">
-            {citation.filePath}
+            {citation.filePath.split('/').pop()}
             {citation.startLine != null ? `:${citation.startLine}` : ""}
           </span>
-          <ExternalLink className="size-3 opacity-60" />
-        </Badge>
+        </button>
       ))}
     </div>
   );

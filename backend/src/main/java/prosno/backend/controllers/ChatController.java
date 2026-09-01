@@ -23,9 +23,12 @@ import prosno.backend.services.ChatService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
+import lombok.extern.slf4j.Slf4j;
+
 @RestController
 @RequestMapping("/api/chat")
 @RequiredArgsConstructor
+@Slf4j
 public class ChatController {
 
     private final CurrentUser currentUser;
@@ -55,6 +58,8 @@ public class ChatController {
             @PathVariable UUID id,
             @Valid @RequestBody ChatMessageRequest request) {
         UUID userId = currentUser.require().getId();
+        int contentLen = request.content() != null ? request.content().length() : 0;
+        log.info("Chat request received for session {}, message length: {}", id, contentLen);
         return chatService.streamReply(userId, id, request.content());
     }
 }

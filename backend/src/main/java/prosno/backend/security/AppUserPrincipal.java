@@ -35,6 +35,9 @@ public class AppUserPrincipal implements OAuth2User {
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
+        if (user.isAdmin()) {
+            return AuthorityUtils.createAuthorityList("ROLE_USER", "ROLE_ADMIN");
+        }
         return AuthorityUtils.createAuthorityList("ROLE_USER");
     }
 

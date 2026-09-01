@@ -65,7 +65,8 @@ export function useStartIndexing() {
 
   return useMutation({
     mutationFn: (repoId: string) => api.startIndex(repoId),
-    onSuccess: (repo) => {
+    onSuccess: (data) => {
+      const repo = data.repository;
       queryClient.setQueryData(queryKeys.repos.detail(repo.id), repo);
       updateRepoInListCache(queryClient, repo);
       void queryClient.invalidateQueries({

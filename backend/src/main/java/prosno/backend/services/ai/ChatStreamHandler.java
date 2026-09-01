@@ -36,11 +36,29 @@ public class ChatStreamHandler {
             List<CitationDto> citations,
             String systemPrompt,
             String userPrompt) {
-
         SseEmitter emitter = new SseEmitter(RagSettings.STREAM_TIMEOUT_MS);
+        streamWithExistingEmitter(emitter, sessionId, savedUserMessage, citations, systemPrompt, userPrompt);
+        return emitter;
+    }
+
+    public void streamWithExistingEmitter(
+            SseEmitter emitter,
+            UUID sessionId,
+            ChatMessageResponse savedUserMessage,
+            List<CitationDto> citations,
+            String systemPrompt,
+            String userPrompt) {
+
         StringBuilder fullReply = new StringBuilder();
+        long t0 = System.currentTimeMillis();
+        java.util.concurrent.atomic.AtomicLong firstTokenTime = new java.util.concurrent.atomic.AtomicLong(0);
 
         try {
+            log.info("SSE connection opened for session {}", sessionId);
+            emitter.onCompletion(() -> log.info("SSE stream completed for session {}", sessionId));
+            emitter.onError(err -> log.warn("SSE stream failed for session {}: {}", sessionId, err.getMessage()));
+            emitter.onTimeout(() -> log.warn("SSE stream timed out for session {}", sessionId));
+
             emitter.send(SseEmitter.event()
                     .name("user_message")
                     .data(savedUserMessage));
@@ -52,19 +70,26 @@ public class ChatStreamHandler {
                     .user(userPrompt)
                     .stream()
                     .content()
-                    .doOnNext(token -> appendToken(emitter, fullReply, token))
+                    .doOnNext(token -> {
+                        if (firstTokenTime.compareAndSet(0, System.currentTimeMillis())) {
+                            log.info("LLM generation started, first token emitted (ttft: {}ms)", (System.currentTimeMillis() - t0));
+                        }
+                        appendToken(emitter, fullReply, token);
+                    })
                     .doOnError(err -> {
-                        log.error("Chat stream error", err);
+                        if (err.getMessage() != null && err.getMessage().equals("Client disconnected")) {
+                            log.info("Chat stream aborted by client disconnect");
+                        } else {
+                            log.error("Chat stream error", err);
+                        }
                         emitter.completeWithError(err);
                     })
                     .doOnComplete(() -> completeStream(
-                            emitter, sessionId, fullReply, citations))
+                            emitter, sessionId, fullReply, citations, t0, firstTokenTime.get()))
                     .subscribe();
         } catch (Exception ex) {
             emitter.completeWithError(ex);
         }
-
-        return emitter;
     }
 
     private void appendToken(SseEmitter emitter, StringBuilder fullReply, String token) {
@@ -74,7 +99,7 @@ public class ChatStreamHandler {
                     .name("token")
                     .data(token, MediaType.APPLICATION_JSON));
         } catch (Exception ex) {
-            throw new IllegalStateException(ex);
+            throw new RuntimeException("Client disconnected", ex);
         }
     }
 
@@ -82,7 +107,9 @@ public class ChatStreamHandler {
             SseEmitter emitter,
             UUID sessionId,
             StringBuilder fullReply,
-            List<CitationDto> citations) {
+            List<CitationDto> citations,
+            long t0,
+            long firstTokenTime) {
         try {
             ChatMessage assistant = chatMessageRepository.save(ChatMessage.builder()
                     .sessionId(sessionId)
@@ -96,6 +123,8 @@ public class ChatStreamHandler {
                     .data(toMessageResponse(assistant)));
             emitter.send(SseEmitter.event().name("done").data("[DONE]"));
             emitter.complete();
+            long totalTime = System.currentTimeMillis() - t0;
+            log.info("LLM generation completed - totalTime: {}ms, replyLength: {}", totalTime, fullReply.length());
         } catch (Exception ex) {
             emitter.completeWithError(ex);
         }

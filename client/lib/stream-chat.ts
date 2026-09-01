@@ -3,6 +3,7 @@ import { getApiBaseUrl, ApiError, getCsrfToken, type ChatMessage } from "@/lib/a
 export type StreamChatHandlers = {
   onUserMessage?: (message: ChatMessage) => void;
   onToken?: (token: string) => void;
+  onStatus?: (message: string) => void;
   onAssistantMessage?: (message: ChatMessage) => void;
   onDone?: () => void;
   onError?: (error: Error) => void;
@@ -78,10 +79,15 @@ export async function streamChatMessage(
       try {
         if (event === "token") {
           handlers.onToken?.(JSON.parse(data) as string);
+        } else if (event === "status") {
+          handlers.onStatus?.((JSON.parse(data) as { message: string }).message);
         } else if (event === "user_message") {
           handlers.onUserMessage?.(JSON.parse(data) as ChatMessage);
         } else if (event === "assistant_message") {
           handlers.onAssistantMessage?.(JSON.parse(data) as ChatMessage);
+        } else if (event === "error") {
+          const errorMsg = (JSON.parse(data) as { message?: string }).message || "An error occurred";
+          throw new Error(errorMsg); // This will be caught locally
         } else if (event === "done") {
           // handled below
         }
@@ -89,6 +95,7 @@ export async function streamChatMessage(
         handlers.onError?.(
           err instanceof Error ? err : new Error("Failed to parse SSE event")
         );
+        throw err; // Re-throw to break the loop and fail the stream
       }
     }
   }

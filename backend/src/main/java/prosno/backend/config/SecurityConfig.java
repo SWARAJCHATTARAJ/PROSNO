@@ -43,9 +43,11 @@ public class SecurityConfig {
                                                                 "/api/auth/login-url",
                                                                 "/oauth2/**",
                                                                 "/login/oauth2/**",
-                                                                "/error")
+                                                                "/error",
+                                                                "/actuator/health")
                                                 .permitAll()
                                                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                                                .requestMatchers("/api/admin/**").hasRole("ADMIN")
                                                 .requestMatchers("/api/**").authenticated()
                                                 .anyRequest().permitAll())
                                 .exceptionHandling(ex -> ex

@@ -39,6 +39,7 @@ public class IndexingService {
     private final CodeFileFilter fileFilter;
     private final CodeChunker codeChunker;
     private final VectorStore vectorStore;
+    private final prosno.backend.repository.UserRepositoryRepository userRepositoryRepository;
 
     private final RateLimitingService rateLimitingService;
 
@@ -72,7 +73,7 @@ public class IndexingService {
                     probe.getNanosToWaitForRefill() / 1_000_000_000L);
         }
 
-        int updatedCount = repositoryRepository.tryStartJob(repoId, IndexStatus.INDEXING, IndexStatus.PENDING, IndexStatus.FAILED, IndexStatus.READY);
+        int updatedCount = repositoryRepository.tryStartJob(repoId, IndexStatus.INDEXING, IndexStatus.PENDING, IndexStatus.FAILED, IndexStatus.READY, IndexStatus.EXPIRED);
         if (updatedCount > 0) {
             // We won the lock, now actually consume the token!
             io.github.bucket4j.ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
@@ -95,13 +96,21 @@ public class IndexingService {
             doIndex(repoId, userId);
         } catch (Exception ex) {
             log.error("Indexing failed for repo {}", repoId, ex);
+            
+            log.info("Cleaning up partial vectors for failed repo {}", repoId);
+            deleteExistingVectors(repoId.toString());
+            
             markFailed(repoId, ex.getMessage());
         }
     }
 
     private void doIndex(UUID repoId, UUID userId) {
+        long t0 = System.currentTimeMillis();
         Repository repo = repositoryRepository.findById(repoId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
+        
+        log.info("STARTED_INDEXING - repoId: {}", repoId);
+
         String token = userService.decryptAccessToken(userService.requiredById(userId));
         
         String targetSha = gitHubApiClient.getLatestCommitSha(token, repo.getOwner(), repo.getName(), repo.getDefaultBranch());
@@ -214,6 +223,8 @@ public class IndexingService {
         }
 
         markReady(repoId, totalFiles, processed, totalChunks, repo.getFullName(), targetSha);
+        log.info("INDEXING_COMPLETED - repoId: {}, filesProcessed: {}, totalChunks: {}, durationMs: {}", 
+            repoId, processed, totalChunks, (System.currentTimeMillis() - t0));
     }
 
     private void deleteExistingVectors(String repoId) {
@@ -283,6 +294,44 @@ public class IndexingService {
             repo.setUpdatedAt(Instant.now());
             repositoryRepository.save(repo);
         }
+    }
+
+    @Async
+    public void forceReindexAllReadyRepos() {
+        List<Repository> readyRepos = repositoryRepository.findByIndexStatus(IndexStatus.READY);
+        log.info("Starting forced re-index of {} READY repos", readyRepos.size());
+        int count = 0;
+        
+        for (Repository repo : readyRepos) {
+            count++;
+            log.info("Re-indexing {}/{} repos, current: {}", count, readyRepos.size(), repo.getFullName());
+            try {
+                // Get a valid user to download the zip
+                List<prosno.backend.entity.UserRepository> userLinks = userRepositoryRepository.findByRepoId(repo.getId());
+                if (userLinks.isEmpty()) {
+                    log.warn("Skipping {}: no associated users to provide GitHub token", repo.getFullName());
+                    continue;
+                }
+                UUID userId = userLinks.get(0).getUserId();
+                
+                // Try to grab the lock
+                int updatedCount = repositoryRepository.tryStartJob(repo.getId(), IndexStatus.INDEXING, IndexStatus.PENDING, IndexStatus.FAILED, IndexStatus.READY, IndexStatus.EXPIRED);
+                if (updatedCount == 0) {
+                    log.warn("Skipping {}: could not acquire indexing lock (already indexing?)", repo.getFullName());
+                    continue;
+                }
+                
+                // We have the lock, bypass tryStartIndexing and rate limiting, call doIndex directly sequentially
+                doIndex(repo.getId(), userId);
+                
+            } catch (Exception e) {
+                log.error("Failed to force re-index repo {}", repo.getFullName(), e);
+                log.info("Cleaning up partial vectors for failed repo {}", repo.getId());
+                deleteExistingVectors(repo.getId().toString());
+                markFailed(repo.getId(), e.getMessage());
+            }
+        }
+        log.info("Finished forced re-index of all READY repos.");
     }
 
 }

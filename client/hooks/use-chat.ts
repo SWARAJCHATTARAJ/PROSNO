@@ -54,6 +54,7 @@ export function useStreamChat(sessionId: string | null) {
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const isStatusRef = useRef(false);
 
   const send = useCallback(
     async (content: string) => {
@@ -79,6 +80,7 @@ export function useStreamChat(sessionId: string | null) {
 
       setStreaming(true);
       setStreamText("");
+      isStatusRef.current = false;
 
       try {
         await streamChatMessage(sessionId, content.trim(), {
@@ -93,7 +95,17 @@ export function useStreamChat(sessionId: string | null) {
             );
           },
           onToken: (token) => {
-            setStreamText((prev) => prev + token);
+            setStreamText((prev) => {
+              if (isStatusRef.current) {
+                isStatusRef.current = false;
+                return token;
+              }
+              return prev + token;
+            });
+          },
+          onStatus: (message) => {
+            isStatusRef.current = true;
+            setStreamText(message);
           },
           onAssistantMessage: (message) => {
             queryClient.setQueryData<ChatMessage[]>(

@@ -23,7 +23,7 @@ public class HfEmbeddingModel extends AbstractEmbeddingModel {
     private final RestClient restClient;
 
     public HfEmbeddingModel(
-            @Value("${HUGGINGFACE_API_KEY}") String apiKey) {
+            @Value("${HUGGINGFACE_API_KEY:mock_key}") String apiKey) {
         this.restClient = RestClient.builder()
                 .baseUrl("https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction")
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)

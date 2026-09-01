@@ -50,6 +50,10 @@ public class User {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Builder.Default
+    @Column(name = "is_admin", columnDefinition = "boolean default false")
+    private boolean isAdmin = false;
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) {

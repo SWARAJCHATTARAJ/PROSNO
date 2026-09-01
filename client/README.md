@@ -1,17 +1,12 @@
 # Prosno Frontend
 
-This is the Next.js frontend for the Prosno application, allowing developers to chat with their GitHub repositories via RAG.
+This is the Next.js frontend for Prosno. It provides the landing page, GitHub OAuth integration, and the authenticated chat interface.
 
-## Tech Stack
-- Next.js 16.3 (App Router)
-- React 19
-- Tailwind CSS v4
-- Shadcn UI (optimized to only include actively used components)
-- Base UI
+For the complete architecture, SSE streaming behavior, and design decisions, see the [main README](../README.md).
 
-## Getting Started
+## Local development
 
-1. Ensure the backend is running.
+1. Ensure the backend is running (port 8080).
 2. Install dependencies:
    ```bash
    npm install
@@ -21,6 +16,11 @@ This is the Next.js frontend for the Prosno application, allowing developers to 
    npm run dev
    ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Visit [http://localhost:3000](http://localhost:3000) to log in.
 
-*Note: This codebase has been recently cleaned of unused scaffold components, dead code, and unused boilerplate files to maintain a lean structure.*
+## Testing
+
+```bash
+npm run build
+npx playwright test
+```

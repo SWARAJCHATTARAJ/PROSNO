@@ -93,6 +93,6 @@
   left: 0;
   right: 0;
   height: 24px;
-  background: linear-gradient(to bottom, transparent, #0f0f0f);
+  background: linear-gradient(to bottom, transparent, var(--background));
   pointer-events: none;
 }

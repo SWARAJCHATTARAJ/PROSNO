@@ -1,4 +1,4 @@
-export type IndexStatus = "PENDING" | "INDEXING" | "READY" | "FAILED";
+export type IndexStatus = "PENDING" | "INDEXING" | "READY" | "FAILED" | "EXPIRED";
 
 export type User = {
   id: string;
@@ -37,7 +37,7 @@ export type IndexStatusResponse = {
   errorMessage: string | null;
 };
 
-export type IndexOutcome = "STARTED_INDEXING" | "ALREADY_UP_TO_DATE" | "ALREADY_IN_PROGRESS";
+export type IndexOutcome = "STARTED_INDEXING" | "ALREADY_UP_TO_DATE" | "ALREADY_IN_PROGRESS" | "ATTACHED_EXISTING";
 
 export type IndexTriggerResponse = {
   repository: Repository;
@@ -143,6 +143,11 @@ export const api = {
   listRepos: (refresh = true) =>
     apiFetch<Repository[]>(`/api/repos?refresh=${refresh}`),
   getRepo: (id: string) => apiFetch<Repository>(`/api/repos/${id}`),
+  addPublicRepo: (input: string) =>
+    apiFetch<IndexTriggerResponse>("/api/repos/add-public", {
+      method: "POST",
+      body: JSON.stringify({ input }),
+    }),
   startIndex: (id: string) =>
     apiFetch<IndexTriggerResponse>(`/api/repos/${id}/index`, { method: "POST" }),
   refreshIndex: (id: string) =>

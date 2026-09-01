@@ -75,4 +75,28 @@ public class RepoController {
         return repoService.status(id, userId);
     }
 
+    @PostMapping("/add-public")
+    public ResponseEntity<prosno.backend.dto.IndexTriggerResponse> addPublic(@org.springframework.web.bind.annotation.RequestBody prosno.backend.dto.AddPublicRepoRequest request) {
+        UUID userId = currentUser.require().getId();
+        
+        RepoService.AddRepoResult result = repoService.addPublicRepo(userId, request.input());
+        Repository repo = result.repo();
+        
+        String outcome = indexingService.tryStartIndexing(repo.getId(), userId);
+        
+        if ("STARTED_INDEXING".equals(outcome)) {
+            indexingService.indexAsync(repo.getId(), userId);
+            Repository updatedRepo = repoService.requireOwned(repo.getId(), userId);
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(new prosno.backend.dto.IndexTriggerResponse(repoService.toResponse(updatedRepo), outcome));
+        } else {
+            if (!result.isNew() && "ALREADY_UP_TO_DATE".equals(outcome)) {
+                outcome = "ATTACHED_EXISTING";
+            }
+            Repository updatedRepo = repoService.requireOwned(repo.getId(), userId);
+            return ResponseEntity.status(HttpStatus.OK)
+                .body(new prosno.backend.dto.IndexTriggerResponse(repoService.toResponse(updatedRepo), outcome));
+        }
+    }
+
 }
