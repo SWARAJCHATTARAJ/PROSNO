@@ -6,26 +6,41 @@ import { Network, Search, FileCode2, Terminal, CheckCircle2 } from "lucide-react
 export function WorkflowSection() {
   const [activeStep, setActiveStep] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const stickyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleScroll = () => {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const progress = -rect.top / (rect.height - window.innerHeight);
+      if (!containerRef.current || !stickyRef.current) return;
+      
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const stickyRect = stickyRef.current.getBoundingClientRect();
+      
+      // top-24 is 96px
+      const stickyTop = 96;
+      const scrollableDistance = containerRect.height - stickyRect.height;
+      
+      if (scrollableDistance <= 0) return;
+      
+      const scrolled = stickyTop - containerRect.top;
+      const progress = Math.max(0, Math.min(1, scrolled / scrollableDistance));
       
       let step = 0;
-      if (progress > 0.175) step = 1;
-      if (progress > 0.35) step = 2;
-      if (progress > 0.525) step = 3;
-      if (progress > 0.70) step = 4;
-      if (progress > 0.875) step = 5;
+      if (progress > 0.16) step = 1;
+      if (progress > 0.33) step = 2;
+      if (progress > 0.50) step = 3;
+      if (progress > 0.66) step = 4;
+      if (progress > 0.83) step = 5;
       
-      setActiveStep(Math.max(0, Math.min(5, step)));
+      setActiveStep(step);
     };
 
     window.addEventListener("scroll", handleScroll);
+    window.addEventListener("resize", handleScroll);
     handleScroll();
-    return () => window.removeEventListener("scroll", handleScroll);
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("resize", handleScroll);
+    };
   }, []);
 
   const steps = [
@@ -99,8 +114,8 @@ export function WorkflowSection() {
     <>
       {/* DESKTOP: Cinematic Sticky Scroll */}
       <div ref={containerRef} className="hidden md:block relative w-full h-[300vh] bg-[#000000]">
-        <div className="sticky top-0 w-full h-screen min-h-[700px] flex items-center justify-center">
-          <div className="w-full max-w-7xl mx-auto px-6 grid grid-cols-2 gap-16 items-center">
+        <div ref={stickyRef} className="sticky top-24 w-full pb-24 flex items-center justify-center">
+          <div className="w-full max-w-7xl mx-auto px-6 grid grid-cols-2 gap-16 items-start">
             
             {/* Left: Sticky narrative */}
             <div className="space-y-6">
