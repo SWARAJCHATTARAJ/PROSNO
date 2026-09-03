@@ -2,6 +2,8 @@ package prosno.backend.controllers;
 
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
 public class AuthController {
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
     private final CurrentUser currentUser;
 
     @GetMapping("/login-url")
@@ -26,8 +29,10 @@ public class AuthController {
 
     @GetMapping("/me")
     public ResponseEntity<UserResponse> me() {
+        log.debug("/api/auth/me called - checking authentication");
         AppUserPrincipal principal = currentUser.require();
         User user = principal.getUser();
+        log.info("/api/auth/me authenticated: userId={}, githubUsername={}", user.getId(), user.getGithubUsername());
         return ResponseEntity.ok(new UserResponse(
                 user.getId(),
                 user.getGithubId(),

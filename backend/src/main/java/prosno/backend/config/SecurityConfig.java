@@ -87,15 +87,38 @@ public class SecurityConfig {
         AuthenticationSuccessHandler oauth2SuccessHandler(
                         @Value("${app.frontend-url}") String frontendUrl) {
                 SimpleUrlAuthenticationSuccessHandler handler = new SimpleUrlAuthenticationSuccessHandler();
-                handler.setDefaultTargetUrl(frontendUrl + "/auth/callback");
-                return handler;
+                String targetUrl = frontendUrl + "/auth/callback";
+                handler.setDefaultTargetUrl(targetUrl);
+                return new SimpleUrlAuthenticationSuccessHandler(targetUrl) {
+                        @Override
+                        public void onAuthenticationSuccess(jakarta.servlet.http.HttpServletRequest request,
+                                        jakarta.servlet.http.HttpServletResponse response,
+                                        org.springframework.security.core.Authentication authentication)
+                                        throws java.io.IOException, jakarta.servlet.ServletException {
+                                org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SecurityConfig.class);
+                                String sessionId = request.getSession(false) != null ? request.getSession(false).getId() : "no-session";
+                                log.info("OAuth2 login success - redirecting to: {}, sessionId: {}", targetUrl, sessionId);
+                                super.onAuthenticationSuccess(request, response, authentication);
+                        }
+                };
         }
 
         @Bean
         AuthenticationFailureHandler oauth2FailureHandler(
                         @Value("${app.frontend-url}") String frontendUrl) {
                 SimpleUrlAuthenticationFailureHandler handler = new SimpleUrlAuthenticationFailureHandler();
-                handler.setDefaultFailureUrl(frontendUrl + "/login?error=oauth_failed");
-                return handler;
+                String failureUrl = frontendUrl + "/login?error=oauth_failed";
+                handler.setDefaultFailureUrl(failureUrl);
+                return new SimpleUrlAuthenticationFailureHandler(failureUrl) {
+                        @Override
+                        public void onAuthenticationFailure(jakarta.servlet.http.HttpServletRequest request,
+                                        jakarta.servlet.http.HttpServletResponse response,
+                                        org.springframework.security.core.AuthenticationException exception)
+                                        throws java.io.IOException, jakarta.servlet.ServletException {
+                                org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SecurityConfig.class);
+                                log.warn("OAuth2 login failure - redirecting to: {}, error: {}", failureUrl, exception.getMessage());
+                                super.onAuthenticationFailure(request, response, exception);
+                        }
+                };
         }
 }
