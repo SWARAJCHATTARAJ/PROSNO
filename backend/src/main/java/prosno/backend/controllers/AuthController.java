@@ -28,8 +28,11 @@ public class AuthController {
     }
 
     @GetMapping("/me")
-    public ResponseEntity<UserResponse> me() {
-        log.debug("/api/auth/me called - checking authentication");
+    public ResponseEntity<UserResponse> me(jakarta.servlet.http.HttpServletRequest request) {
+        jakarta.servlet.http.HttpSession session = request.getSession(false);
+        String sessionId = session != null ? session.getId() : "none";
+        boolean authPresent = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication() != null;
+        log.info("/api/auth/me called: sessionId={}, authPresent={}", sessionId, authPresent);
         AppUserPrincipal principal = currentUser.require();
         User user = principal.getUser();
         log.info("/api/auth/me authenticated: userId={}, githubUsername={}", user.getId(), user.getGithubUsername());

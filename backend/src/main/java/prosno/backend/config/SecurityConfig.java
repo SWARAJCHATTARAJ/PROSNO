@@ -31,11 +31,16 @@ public class SecurityConfig {
                         HttpSecurity http,
                         AuthenticationSuccessHandler oauth2SuccessHandler,
                         AuthenticationFailureHandler oauth2FailureHandler) throws Exception {
+                org.springframework.security.web.context.HttpSessionSecurityContextRepository securityContextRepository =
+                                new org.springframework.security.web.context.HttpSessionSecurityContextRepository();
+
                 http
                                 .cors(Customizer.withDefaults())
                                 .csrf(csrf -> csrf
-                                                .csrfTokenRepository(org.springframework.security.web.csrf.CookieCsrfTokenRepository.withHttpOnlyFalse())
+                                                .csrfTokenRepository(cookieCsrfTokenRepository())
                                                 .csrfTokenRequestHandler(new org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler()))
+                                .securityContext(sc -> sc
+                                                .securityContextRepository(securityContextRepository))
                                 .sessionManagement(session -> session
                                                 .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                                 .authorizeHttpRequests(auth -> auth
@@ -70,6 +75,13 @@ public class SecurityConfig {
                 return http.build();
         }
 
+        private static org.springframework.security.web.csrf.CookieCsrfTokenRepository cookieCsrfTokenRepository() {
+                org.springframework.security.web.csrf.CookieCsrfTokenRepository repository =
+                                org.springframework.security.web.csrf.CookieCsrfTokenRepository.withHttpOnlyFalse();
+                repository.setCookieCustomizer(customizer -> customizer.sameSite("None").secure(true).path("/"));
+                return repository;
+        }
+
         private static final class CsrfCookieFilter extends org.springframework.web.filter.OncePerRequestFilter {
                 @Override
                 protected void doFilterInternal(jakarta.servlet.http.HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response, jakarta.servlet.FilterChain filterChain)
@@ -86,9 +98,7 @@ public class SecurityConfig {
         @Bean
         AuthenticationSuccessHandler oauth2SuccessHandler(
                         @Value("${app.frontend-url}") String frontendUrl) {
-                SimpleUrlAuthenticationSuccessHandler handler = new SimpleUrlAuthenticationSuccessHandler();
                 String targetUrl = frontendUrl + "/auth/callback";
-                handler.setDefaultTargetUrl(targetUrl);
                 return new SimpleUrlAuthenticationSuccessHandler(targetUrl) {
                         @Override
                         public void onAuthenticationSuccess(jakarta.servlet.http.HttpServletRequest request,
@@ -96,8 +106,10 @@ public class SecurityConfig {
                                         org.springframework.security.core.Authentication authentication)
                                         throws java.io.IOException, jakarta.servlet.ServletException {
                                 org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SecurityConfig.class);
-                                String sessionId = request.getSession(false) != null ? request.getSession(false).getId() : "no-session";
-                                log.info("OAuth2 login success - redirecting to: {}, sessionId: {}", targetUrl, sessionId);
+                                jakarta.servlet.http.HttpSession session = request.getSession(false);
+                                String sessionId = session != null ? session.getId() : "no-session";
+                                log.info("OAuth2 login success - principal: {}, redirecting to: {}, sessionId: {}",
+                                                authentication.getName(), targetUrl, sessionId);
                                 super.onAuthenticationSuccess(request, response, authentication);
                         }
                 };
@@ -106,9 +118,7 @@ public class SecurityConfig {
         @Bean
         AuthenticationFailureHandler oauth2FailureHandler(
                         @Value("${app.frontend-url}") String frontendUrl) {
-                SimpleUrlAuthenticationFailureHandler handler = new SimpleUrlAuthenticationFailureHandler();
                 String failureUrl = frontendUrl + "/login?error=oauth_failed";
-                handler.setDefaultFailureUrl(failureUrl);
                 return new SimpleUrlAuthenticationFailureHandler(failureUrl) {
                         @Override
                         public void onAuthenticationFailure(jakarta.servlet.http.HttpServletRequest request,
@@ -116,7 +126,7 @@ public class SecurityConfig {
                                         org.springframework.security.core.AuthenticationException exception)
                                         throws java.io.IOException, jakarta.servlet.ServletException {
                                 org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SecurityConfig.class);
-                                log.warn("OAuth2 login failure - redirecting to: {}, error: {}", failureUrl, exception.getMessage());
+                                log.warn("OAuth2 login failure - redirecting to: {}, error: {}", failureUrl, exception.getMessage(), exception);
                                 super.onAuthenticationFailure(request, response, exception);
                         }
                 };

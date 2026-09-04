@@ -1,6 +1,8 @@
 package prosno.backend.security;
 
+import java.io.Serializable;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -10,14 +12,16 @@ import org.springframework.security.oauth2.core.user.OAuth2User;
 
 import prosno.backend.entity.User;
 
-public class AppUserPrincipal implements OAuth2User {
+public class AppUserPrincipal implements OAuth2User, Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     private final User user;
     private final Map<String, Object> attributes;
 
     public AppUserPrincipal(User user, Map<String, Object> attributes) {
         this.user = user;
-        this.attributes = attributes;
+        this.attributes = attributes != null ? new HashMap<>(attributes) : new HashMap<>();
     }
 
     public UUID getId() {
