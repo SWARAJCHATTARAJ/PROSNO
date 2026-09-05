@@ -42,6 +42,7 @@ import prosno.backend.services.UserService;
     "app.token-encryptor-password=dummy-password",
     "app.token-encryptor-salt=deadbeef"
 })
+@org.springframework.test.context.ContextConfiguration(initializers = prosno.backend.config.EnvInitializer.class)
 public class E2ERegressionTests {
 
     @Autowired private RepositoryRepository repositoryRepository;

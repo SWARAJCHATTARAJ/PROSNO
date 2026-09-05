@@ -34,6 +34,7 @@ import prosno.backend.services.indexing.IndexingService;
     "app.token-encryptor-password=dummy-password",
     "app.token-encryptor-salt=deadbeef"
 })
+@org.springframework.test.context.ContextConfiguration(initializers = prosno.backend.config.EnvInitializer.class)
 public class IndexingConcurrencyTest {
 
     @Autowired

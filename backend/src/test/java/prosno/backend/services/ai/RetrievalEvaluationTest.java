@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
+@org.springframework.test.context.ContextConfiguration(initializers = prosno.backend.config.EnvInitializer.class)
 @ActiveProfiles("test")
 @Transactional
 public class RetrievalEvaluationTest {

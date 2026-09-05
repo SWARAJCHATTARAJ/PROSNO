@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import prosno.backend.services.ai.CodeContextRetriever;
 
 @SpringBootTest
+@org.springframework.test.context.ContextConfiguration(initializers = prosno.backend.config.EnvInitializer.class)
 @ActiveProfiles("test")
 @Transactional
 public class RepositoryIsolationTest {

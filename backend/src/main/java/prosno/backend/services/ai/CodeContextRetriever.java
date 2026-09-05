@@ -33,24 +33,27 @@ public class CodeContextRetriever {
         String embeddingStr = java.util.Arrays.toString(queryEmbedding);
 
         // Execute Hybrid Search: Semantic Similarity (cosine distance) + Full-Text Search (BM25)
-        // We use a simplified RRF (Reciprocal Rank Fusion) approximation by combining scores or just unioning results.
-        // For simplicity and speed, we do a UNION of the top K vector matches and top K text matches.
+        // Reciprocal Rank Fusion (RRF) combines vector and full-text ranks.
         String sql = """
             WITH vector_matches AS (
                 SELECT id, content, metadata,
                        ROW_NUMBER() OVER (ORDER BY embedding <=> ?::vector ASC) as rn
                 FROM vector_store
                 WHERE metadata->>'repoId' = ?
-                  AND embedding <=> ?::vector < 0.6
+                  AND embedding <=> ?::vector < 0.92
                 ORDER BY embedding <=> ?::vector ASC
                 LIMIT ?
             ),
+            text_query AS (
+                SELECT NULLIF(replace(plainto_tsquery('english', ?)::text, '&', '|'), '')::tsquery AS q
+            ),
             text_matches_raw AS (
                 SELECT id, content, metadata,
-                       ts_rank(to_tsvector('english', content), plainto_tsquery('english', ?)) AS rank
-                FROM vector_store
+                       ts_rank(to_tsvector('english', content), q.q) AS rank
+                FROM vector_store, text_query q
                 WHERE metadata->>'repoId' = ?
-                  AND to_tsvector('english', content) @@ plainto_tsquery('english', ?)
+                  AND q.q IS NOT NULL
+                  AND to_tsvector('english', content) @@ q.q
             ),
             text_matches AS (
                 SELECT id, content, metadata,
@@ -85,7 +88,7 @@ public class CodeContextRetriever {
                     return new Document(content, metadata);
                 },
                 embeddingStr, repositoryId.toString(), embeddingStr, embeddingStr, RagSettings.TOP_K_CHUNKS,
-                question, repositoryId.toString(), question,
+                question, repositoryId.toString(),
                 RagSettings.TOP_K_CHUNKS,
                 RagSettings.TOP_K_CHUNKS
         );
