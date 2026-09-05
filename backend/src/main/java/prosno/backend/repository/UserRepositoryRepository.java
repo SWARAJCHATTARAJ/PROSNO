@@ -15,5 +15,7 @@ public interface UserRepositoryRepository extends JpaRepository<UserRepository, 
     List<UserRepository> findByUserId(UUID userId);
     List<UserRepository> findByRepoId(UUID repoId);
     boolean existsByUserIdAndRepoId(UUID userId, UUID repoId);
+    long countByRepoId(UUID repoId);
     void deleteByRepoId(UUID repoId);
+    void deleteByUserIdAndRepoId(UUID userId, UUID repoId);
 }

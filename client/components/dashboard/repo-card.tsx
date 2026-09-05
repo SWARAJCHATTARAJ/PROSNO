@@ -9,6 +9,7 @@ import {
  MessageSquare,
  RotateCcw,
  Sparkles,
+ Trash2,
 } from "lucide-react";
 
 import { IndexErrorAlert } from "@/components/dashboard/index-error-alert";
@@ -18,13 +19,14 @@ import { LanguageIcon } from "@/components/icons/language-icon";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { getRepoProgress, useStartIndexing } from "@/hooks/use-repos";
+import { getRepoProgress, useDisconnectRepo, useStartIndexing } from "@/hooks/use-repos";
 import type { Repository } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export function RepoCard({ repo }: { repo: Repository }) {
  const router = useRouter();
  const indexMutation = useStartIndexing();
+ const disconnectMutation = useDisconnectRepo();
  const isIndexing = repo.indexStatus === "INDEXING" || indexMutation.isPending;
  const isFailed = repo.indexStatus === "FAILED";
  const progress = getRepoProgress(repo);
@@ -128,18 +130,32 @@ export function RepoCard({ repo }: { repo: Repository }) {
  </div>
 
  <div className="mt-auto flex items-center justify-between gap-2 border-t border-dashed border-border/70 p-4">
- {repo.htmlUrl ? (
- <Button
- variant="ghost"
- size="sm"
- render={<a href={repo.htmlUrl} target="_blank" rel="noreferrer" />}
- >
- <ExternalLink data-icon="inline-start" />
- GitHub
- </Button>
- ) : (
- <span />
- )}
+  <div className="flex items-center gap-1">
+    {repo.htmlUrl && (
+      <Button
+        variant="ghost"
+        size="sm"
+        render={<a href={repo.htmlUrl} target="_blank" rel="noreferrer" />}
+      >
+        <ExternalLink data-icon="inline-start" />
+        GitHub
+      </Button>
+    )}
+    <Button
+      variant="ghost"
+      size="sm"
+      className="text-muted-foreground hover:text-destructive h-8 px-2"
+      title="Disconnect repository"
+      disabled={disconnectMutation.isPending}
+      onClick={() => {
+        if (confirm(`Disconnect ${repo.fullName} from your workspace?`)) {
+          disconnectMutation.mutate(repo.id);
+        }
+      }}
+    >
+      {disconnectMutation.isPending ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
+    </Button>
+  </div>
 
  <div className="flex gap-2">
  {repo.indexStatus === "READY" && (

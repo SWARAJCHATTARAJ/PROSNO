@@ -17,7 +17,10 @@ import org.springframework.core.task.TaskDecorator;
 public class AppConfig {
     @Bean
     RestClient.Builder restClientBuilder() {
-        return RestClient.builder();
+        org.springframework.http.client.SimpleClientHttpRequestFactory requestFactory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(java.time.Duration.ofSeconds(15));
+        requestFactory.setReadTimeout(java.time.Duration.ofSeconds(60));
+        return RestClient.builder().requestFactory(requestFactory);
     }
 
     @Bean(name = "indexingExecutor")

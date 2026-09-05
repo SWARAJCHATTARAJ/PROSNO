@@ -52,25 +52,38 @@ export function IndexingState({
  );
  }
 
- return (
- <Empty className="h-full border-0">
- <EmptyHeader>
- <EmptyMedia variant="icon">
- <Loader2 className="animate-spin" />
- </EmptyMedia>
- <EmptyTitle>Indexing {repo.fullName}</EmptyTitle>
- <EmptyDescription>
- {filesTotal > 0
- ? `${filesProcessed} of ${filesTotal} files · ${chunkCount} chunks embedded`
- : "Fetching repository files and preparing embeddings…"}
- </EmptyDescription>
- </EmptyHeader>
- <div className="w-full max-w-sm space-y-2">
- <Progress value={Math.max(progress, filesTotal ? progress : 12)} />
- <p className="text-center text-xs text-muted-foreground">
- You can leave this page open — chat unlocks when indexing finishes.
- </p>
- </div>
- </Empty>
- );
+  return (
+    <Empty className="h-full border-0">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Loader2 className="animate-spin" />
+        </EmptyMedia>
+        <EmptyTitle>Indexing {repo.fullName}</EmptyTitle>
+        <EmptyDescription>
+          {filesTotal > 0
+            ? `${filesProcessed} of ${filesTotal} files · ${chunkCount} chunks embedded`
+            : indexStatus === "PENDING" && !indexMutation.isPending
+              ? "Connecting repository and preparing to index…"
+              : "Fetching repository files and preparing embeddings…"}
+        </EmptyDescription>
+      </EmptyHeader>
+      <div className="w-full max-w-sm space-y-3">
+        <Progress value={Math.max(progress, filesTotal ? progress : 12)} />
+        <p className="text-center text-xs text-muted-foreground">
+          You can leave this page open — chat unlocks when indexing finishes.
+        </p>
+        {indexStatus === "PENDING" && !indexMutation.isPending && (
+          <div className="flex justify-center pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => indexMutation.mutate(repo.id)}
+            >
+              Start indexing now
+            </Button>
+          </div>
+        )}
+      </div>
+    </Empty>
+  );
 }

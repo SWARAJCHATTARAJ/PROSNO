@@ -41,6 +41,12 @@ public class GithubApiClient {
                             .queryParam("page", currentPage)
                             .build())
                     .retrieve()
+                    .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.UNAUTHORIZED), (req, res) -> {
+                        throw new prosno.backend.exceptions.UnauthorizedException("GitHub access token expired or revoked. Please log in again.");
+                    })
+                    .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.FORBIDDEN), (req, res) -> {
+                        throw new prosno.backend.exceptions.ForbiddenException("Access to GitHub repositories is forbidden or rate limited.");
+                    })
                     .body(LIST_MAP);
             if (pageRepos == null || pageRepos.isEmpty()) {
                 break;
@@ -91,8 +97,27 @@ public class GithubApiClient {
                     if (response.getStatusCode().is3xxRedirection()) {
                         String location = response.getHeaders().getFirst(HttpHeaders.LOCATION);
                         if (location != null) {
-                            return client(accessToken).get().uri(location).retrieve().body(byte[].class);
+                            try {
+                                return restClientBuilder.build()
+                                        .get()
+                                        .uri(java.net.URI.create(location))
+                                        .retrieve()
+                                        .body(byte[].class);
+                            } catch (Exception ex) {
+                                return client(accessToken)
+                                        .get()
+                                        .uri(java.net.URI.create(location))
+                                        .retrieve()
+                                        .body(byte[].class);
+                            }
                         }
+                    }
+                    if (response.getStatusCode().isError()) {
+                        String err = "";
+                        try {
+                            err = new String(response.bodyTo(byte[].class), StandardCharsets.UTF_8);
+                        } catch (Exception ignored) {}
+                        throw new RuntimeException("GitHub returned HTTP " + response.getStatusCode() + " while downloading repo zip: " + err);
                     }
                     return response.bodyTo(byte[].class);
                 });
@@ -120,6 +145,26 @@ public class GithubApiClient {
                 })
                 .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.FORBIDDEN), (req, res) -> {
                     throw new prosno.backend.exceptions.ForbiddenException("Access to this repository is forbidden");
+                })
+                .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.UNAUTHORIZED), (req, res) -> {
+                    throw new prosno.backend.exceptions.UnauthorizedException("GitHub access token expired or revoked. Please log in again.");
+                })
+                .body(MAP);
+    }
+
+    public Map<String, Object> getRepoById(String accessToken, Long githubRepoId) {
+        return client(accessToken)
+                .get()
+                .uri("/repositories/{id}", githubRepoId)
+                .retrieve()
+                .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.NOT_FOUND), (req, res) -> {
+                    throw new prosno.backend.exceptions.NotFoundException("Repository not found or not accessible");
+                })
+                .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.FORBIDDEN), (req, res) -> {
+                    throw new prosno.backend.exceptions.ForbiddenException("Access to this repository is forbidden");
+                })
+                .onStatus(status -> status.isSameCodeAs(org.springframework.http.HttpStatus.UNAUTHORIZED), (req, res) -> {
+                    throw new prosno.backend.exceptions.UnauthorizedException("GitHub access token expired or revoked. Please log in again.");
                 })
                 .body(MAP);
     }

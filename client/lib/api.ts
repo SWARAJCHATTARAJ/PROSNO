@@ -111,16 +111,99 @@ async function parseError(res: Response): Promise<{message: string, retryAfter?:
   return { message, retryAfter };
 }
 
+export type GithubRepo = {
+  id: number;
+  name: string;
+  fullName: string;
+  owner: string;
+  isPrivate: boolean;
+  htmlUrl: string | null;
+  description: string | null;
+  defaultBranch: string;
+  language: string | null;
+  connected: boolean;
+  connectedRepoId: string | null;
+  indexStatus: IndexStatus | null;
+};
+
+export type ConnectRepoRequest = {
+  githubRepoId?: number;
+  fullName?: string;
+};
+
+export type ConnectBatchRequest = {
+  repositories: ConnectRepoRequest[];
+};
+
+export type ConnectBatchItemResult = {
+  githubRepoId?: number;
+  fullName?: string;
+  success: boolean;
+  repository?: Repository;
+  outcome?: IndexOutcome;
+  error?: string;
+};
+
+export type ConnectBatchResponse = {
+  results: ConnectBatchItemResult[];
+};
+
+let inMemoryCsrfToken = "";
+
+export function setCsrfToken(token: string) {
+  if (token) {
+    inMemoryCsrfToken = token;
+  }
+}
+
 export function getCsrfToken() {
+  if (inMemoryCsrfToken) return inMemoryCsrfToken;
   if (typeof document === "undefined") return "";
   const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/);
   return match ? decodeURIComponent(match[1]) : "";
+}
+
+let csrfPromise: Promise<string> | null = null;
+
+export async function ensureCsrfToken(): Promise<string> {
+  const current = getCsrfToken();
+  if (current) return current;
+  if (csrfPromise) return csrfPromise;
+
+  csrfPromise = (async () => {
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/api/auth/csrf`, {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token) {
+          setCsrfToken(data.token);
+          return data.token;
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      csrfPromise = null;
+    }
+    return getCsrfToken();
+  })();
+
+  return csrfPromise;
 }
 
 export async function apiFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const isMutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+
+  if (isMutating && !getCsrfToken()) {
+    await ensureCsrfToken();
+  }
+
   const csrfToken = getCsrfToken();
   const res = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
@@ -131,6 +214,11 @@ export async function apiFetch<T>(
       ...(init?.headers ?? {}),
     },
   });
+
+  const csrfFromHeader = res.headers.get("X-CSRF-TOKEN");
+  if (csrfFromHeader) {
+    setCsrfToken(csrfFromHeader);
+  }
 
   if (!res.ok) {
     const parsed = await parseError(res);
@@ -145,15 +233,37 @@ export async function apiFetch<T>(
 }
 
 export const api = {
+  csrf: () => apiFetch<{ token: string; headerName: string }>("/api/auth/csrf"),
   me: () => apiFetch<User>("/api/auth/me"),
-  logout: () =>
-    apiFetch<void>("/api/auth/logout", {
-      method: "POST",
-    }),
+  logout: async () => {
+    await ensureCsrfToken();
+    try {
+      await apiFetch<void>("/api/auth/logout", {
+        method: "POST",
+      });
+    } finally {
+      inMemoryCsrfToken = "";
+    }
+  },
 
-  listRepos: (refresh = true) =>
+  listRepos: (refresh = false) =>
     apiFetch<Repository[]>(`/api/repos?refresh=${refresh}`),
   getRepo: (id: string) => apiFetch<Repository>(`/api/repos/${id}`),
+  listGithubRepos: () => apiFetch<GithubRepo[]>("/api/repos/github"),
+  connectRepo: (req: ConnectRepoRequest) =>
+    apiFetch<IndexTriggerResponse>("/api/repos/connect", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  connectBatch: (req: ConnectBatchRequest) =>
+    apiFetch<ConnectBatchResponse>("/api/repos/connect/batch", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  disconnectRepo: (id: string) =>
+    apiFetch<void>(`/api/repos/${id}`, {
+      method: "DELETE",
+    }),
   addPublicRepo: (input: string) =>
     apiFetch<IndexTriggerResponse>("/api/repos/add-public", {
       method: "POST",
@@ -165,7 +275,7 @@ export const api = {
     apiFetch<IndexTriggerResponse>(`/api/repos/${id}/refresh`, { method: "POST" }),
   indexStatus: (id: string) =>
     apiFetch<IndexStatusResponse>(`/api/repos/${id}/status`),
-   createSession: (repositoryId: string, title?: string) =>
+  createSession: (repositoryId: string, title?: string) =>
     apiFetch<ChatSession>("/api/chat/sessions", {
       method: "POST",
       body: JSON.stringify({ repositoryId, title }),

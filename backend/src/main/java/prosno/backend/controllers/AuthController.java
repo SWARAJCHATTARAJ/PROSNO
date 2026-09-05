@@ -27,6 +27,18 @@ public class AuthController {
         return Map.of("url", "/oauth2/authorization/github");
     }
 
+    @GetMapping("/csrf")
+    public ResponseEntity<Map<String, String>> csrf(jakarta.servlet.http.HttpServletRequest request) {
+        org.springframework.security.web.csrf.CsrfToken csrfToken = 
+                (org.springframework.security.web.csrf.CsrfToken) request.getAttribute(org.springframework.security.web.csrf.CsrfToken.class.getName());
+        String token = csrfToken != null ? csrfToken.getToken() : "";
+        return ResponseEntity.ok(Map.of(
+                "token", token,
+                "headerName", "X-XSRF-TOKEN",
+                "parameterName", "_csrf"
+        ));
+    }
+
     @GetMapping("/me")
     public ResponseEntity<UserResponse> me(jakarta.servlet.http.HttpServletRequest request) {
         jakarta.servlet.http.HttpSession session = request.getSession(false);

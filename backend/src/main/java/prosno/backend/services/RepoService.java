@@ -26,6 +26,176 @@ public class RepoService {
     private final prosno.backend.repository.UserRepositoryRepository userRepositoryRepository;
     private final UserService userService;
     private final GithubApiClient gitHubApiClient;
+    private final prosno.backend.repository.ChatSessionRepository chatSessionRepository;
+    private final prosno.backend.repository.ChatMessageRepository chatMessageRepository;
+
+    @Transactional(readOnly = true)
+    public List<prosno.backend.dto.GithubRepoResponse> listUserGithubRepos(UUID userId) {
+        User user = userService.requiredById(userId);
+        String token = userService.decryptAccessToken(user);
+        List<Map<String, Object>> remoteRepos = gitHubApiClient.listUserRepos(token);
+
+        List<Repository> storedRepos = repositoryRepository.findByUserIdOrderByFullNameAsc(userId);
+        Map<Long, Repository> storedByGithubId = storedRepos.stream()
+                .filter(r -> r.getGithubRepoId() != null)
+                .collect(java.util.stream.Collectors.toMap(Repository::getGithubRepoId, r -> r, (a, b) -> a));
+        Map<String, Repository> storedByFullName = storedRepos.stream()
+                .filter(r -> r.getFullName() != null)
+                .collect(java.util.stream.Collectors.toMap(r -> r.getFullName().toLowerCase(), r -> r, (a, b) -> a));
+
+        List<prosno.backend.dto.GithubRepoResponse> results = new ArrayList<>();
+        for (Map<String, Object> remote : remoteRepos) {
+            Long githubRepoId = toLong(remote.get("id"));
+            String fullName = String.valueOf(remote.get("full_name"));
+            String name = String.valueOf(remote.get("name"));
+            String owner = remote.get("owner") instanceof Map<?, ?> om && om.get("login") != null 
+                    ? String.valueOf(om.get("login")) : fullName.split("/")[0];
+            boolean isPrivate = Boolean.TRUE.equals(remote.get("private"));
+            String htmlUrl = remote.get("html_url") != null ? String.valueOf(remote.get("html_url")) : null;
+            String description = remote.get("description") != null ? String.valueOf(remote.get("description")) : null;
+            String defaultBranch = remote.get("default_branch") != null ? String.valueOf(remote.get("default_branch")) : "main";
+            String language = remote.get("language") != null ? String.valueOf(remote.get("language")) : null;
+
+            Repository connected = storedByGithubId.get(githubRepoId);
+            if (connected == null && fullName != null) {
+                connected = storedByFullName.get(fullName.toLowerCase());
+            }
+
+            boolean isConnected = connected != null;
+            UUID connectedId = isConnected ? connected.getId() : null;
+            prosno.backend.entity.IndexStatus status = isConnected ? connected.getIndexStatus() : null;
+
+            results.add(new prosno.backend.dto.GithubRepoResponse(
+                    githubRepoId,
+                    name,
+                    fullName,
+                    owner,
+                    isPrivate,
+                    htmlUrl,
+                    description,
+                    defaultBranch,
+                    language,
+                    isConnected,
+                    connectedId,
+                    status
+            ));
+        }
+        return results;
+    }
+
+    @Transactional
+    public AddRepoResult connectRepo(UUID userId, Long githubRepoId, String fullName) {
+        if (githubRepoId == null && (fullName == null || fullName.isBlank())) {
+            throw new prosno.backend.exceptions.BadRequestException("Repository ID or full name must be provided");
+        }
+
+        User user = userService.requiredById(userId);
+        String token = userService.decryptAccessToken(user);
+
+        Map<String, Object> remote = null;
+        if (githubRepoId != null) {
+            try {
+                remote = gitHubApiClient.getRepoById(token, githubRepoId);
+            } catch (Exception ex) {
+                if (fullName == null || fullName.isBlank()) {
+                    throw ex;
+                }
+            }
+        }
+
+        if (remote == null && fullName != null && !fullName.isBlank()) {
+            String[] parts = fullName.trim().split("/", 2);
+            if (parts.length < 2) {
+                throw new prosno.backend.exceptions.BadRequestException("Invalid repository format. Expected 'owner/name'.");
+            }
+            remote = gitHubApiClient.getRepo(token, parts[0], parts[1]);
+        }
+
+        if (remote == null) {
+            throw new prosno.backend.exceptions.NotFoundException("Repository not found or not accessible on GitHub");
+        }
+
+        Long actualGithubRepoId = toLong(remote.get("id"));
+        String actualFullName = String.valueOf(remote.get("full_name"));
+        String[] parts = actualFullName.split("/", 2);
+        String owner = remote.get("owner") instanceof Map<?, ?> om && om.get("login") != null 
+                ? String.valueOf(om.get("login")) : (parts.length > 0 ? parts[0] : "unknown");
+        String name = remote.get("name") != null ? String.valueOf(remote.get("name")) : (parts.length > 1 ? parts[1] : actualFullName);
+
+        boolean isNew = false;
+        Repository repo = repositoryRepository.findByGithubRepoId(actualGithubRepoId).orElse(null);
+        if (repo == null) {
+            repo = new Repository();
+            repo.setGithubRepoId(actualGithubRepoId);
+            repo.setOwner(owner);
+            repo.setName(name);
+            repo.setFullName(actualFullName);
+            repo.setPrivate(Boolean.TRUE.equals(remote.get("private")));
+            repo.setDefaultBranch(remote.get("default_branch") != null ? String.valueOf(remote.get("default_branch")) : "main");
+            repo.setLanguage(remote.get("language") != null ? String.valueOf(remote.get("language")) : null);
+            repo.setHtmlUrl(remote.get("html_url") != null ? String.valueOf(remote.get("html_url")) : null);
+            repo.setDescription(remote.get("description") != null ? String.valueOf(remote.get("description")) : null);
+            repo.setUpdatedAt(Instant.now());
+            repo.setIndexStatus(prosno.backend.entity.IndexStatus.PENDING);
+            repo = repositoryRepository.save(repo);
+            isNew = true;
+        } else {
+            repo.setOwner(owner);
+            repo.setName(name);
+            repo.setFullName(actualFullName);
+            repo.setPrivate(Boolean.TRUE.equals(remote.get("private")));
+            repo.setDefaultBranch(remote.get("default_branch") != null ? String.valueOf(remote.get("default_branch")) : repo.getDefaultBranch());
+            repo.setLanguage(remote.get("language") != null ? String.valueOf(remote.get("language")) : repo.getLanguage());
+            repo.setHtmlUrl(remote.get("html_url") != null ? String.valueOf(remote.get("html_url")) : repo.getHtmlUrl());
+            repo.setDescription(remote.get("description") != null ? String.valueOf(remote.get("description")) : repo.getDescription());
+            repo.setUpdatedAt(Instant.now());
+            repo = repositoryRepository.save(repo);
+        }
+
+        if (!userRepositoryRepository.existsByUserIdAndRepoId(userId, repo.getId())) {
+            userRepositoryRepository.save(
+                prosno.backend.entity.UserRepository.builder()
+                    .userId(userId)
+                    .repoId(repo.getId())
+                    .build()
+            );
+        }
+
+        return new AddRepoResult(repo, isNew);
+    }
+
+    @Transactional
+    public void disconnectRepo(UUID userId, UUID repoId) {
+        Repository repo = requireOwned(repoId, userId);
+        List<prosno.backend.entity.ChatSession> sessions = chatSessionRepository.findByUserIdAndRepositoryIdOrderByCreatedAtDesc(userId, repoId);
+        for (prosno.backend.entity.ChatSession session : sessions) {
+            chatMessageRepository.deleteBySessionId(session.getId());
+            chatSessionRepository.delete(session);
+        }
+        userRepositoryRepository.deleteByUserIdAndRepoId(userId, repoId);
+    }
+
+    @Transactional
+    public List<RepositoryResponse> refreshConnectedRepos(UUID userId) {
+        User user = userService.requiredById(userId);
+        String token = userService.decryptAccessToken(user);
+        List<Repository> stored = repositoryRepository.findByUserIdOrderByFullNameAsc(userId);
+
+        for (Repository repo : stored) {
+            try {
+                Map<String, Object> remote = gitHubApiClient.getRepo(token, repo.getOwner(), repo.getName());
+                if (remote != null) {
+                    repo.setDescription(remote.get("description") != null ? String.valueOf(remote.get("description")) : repo.getDescription());
+                    repo.setDefaultBranch(remote.get("default_branch") != null ? String.valueOf(remote.get("default_branch")) : repo.getDefaultBranch());
+                    repo.setLanguage(remote.get("language") != null ? String.valueOf(remote.get("language")) : repo.getLanguage());
+                    repo.setUpdatedAt(Instant.now());
+                    repositoryRepository.save(repo);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return listStored(userId);
+    }
 
     @Transactional
     public List<RepositoryResponse> syncAndListRepos(UUID userId) {

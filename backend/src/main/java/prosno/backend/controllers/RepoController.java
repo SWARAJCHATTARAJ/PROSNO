@@ -32,12 +32,77 @@ public class RepoController {
 
     @GetMapping
     public List<RepositoryResponse> list(
-            @RequestParam(name = "refresh", defaultValue = "true") boolean refresh) {
+            @RequestParam(name = "refresh", defaultValue = "false") boolean refresh) {
         UUID userId = currentUser.require().getId();
         if (refresh) {
-            return repoService.syncAndListRepos(userId);
+            return repoService.refreshConnectedRepos(userId);
         }
         return repoService.listStored(userId);
+    }
+
+    @GetMapping("/github")
+    public List<prosno.backend.dto.GithubRepoResponse> listGithub() {
+        UUID userId = currentUser.require().getId();
+        return repoService.listUserGithubRepos(userId);
+    }
+
+    @PostMapping("/connect")
+    public ResponseEntity<prosno.backend.dto.IndexTriggerResponse> connect(
+            @org.springframework.web.bind.annotation.RequestBody prosno.backend.dto.ConnectRepoRequest request) {
+        UUID userId = currentUser.require().getId();
+        RepoService.AddRepoResult result = repoService.connectRepo(userId, request.githubRepoId(), request.fullName());
+        Repository repo = result.repo();
+
+        String outcome = indexingService.tryStartIndexing(repo.getId(), userId);
+        if ("STARTED_INDEXING".equals(outcome)) {
+            indexingService.indexAsync(repo.getId(), userId);
+            Repository updatedRepo = repoService.requireOwned(repo.getId(), userId);
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(new prosno.backend.dto.IndexTriggerResponse(repoService.toResponse(updatedRepo), outcome));
+        } else {
+            if (!result.isNew() && "ALREADY_UP_TO_DATE".equals(outcome)) {
+                outcome = "ATTACHED_EXISTING";
+            }
+            Repository updatedRepo = repoService.requireOwned(repo.getId(), userId);
+            return ResponseEntity.status(HttpStatus.OK)
+                    .body(new prosno.backend.dto.IndexTriggerResponse(repoService.toResponse(updatedRepo), outcome));
+        }
+    }
+
+    @PostMapping("/connect/batch")
+    public ResponseEntity<prosno.backend.dto.ConnectBatchResponse> connectBatch(
+            @org.springframework.web.bind.annotation.RequestBody prosno.backend.dto.ConnectBatchRequest request) {
+        UUID userId = currentUser.require().getId();
+        List<prosno.backend.dto.ConnectBatchResponse.ConnectBatchItemResult> results = new java.util.ArrayList<>();
+
+        if (request.repositories() != null) {
+            for (prosno.backend.dto.ConnectRepoRequest item : request.repositories()) {
+                try {
+                    RepoService.AddRepoResult result = repoService.connectRepo(userId, item.githubRepoId(), item.fullName());
+                    Repository repo = result.repo();
+                    String outcome = indexingService.tryStartIndexing(repo.getId(), userId);
+                    if ("STARTED_INDEXING".equals(outcome)) {
+                        indexingService.indexAsync(repo.getId(), userId);
+                    } else if (!result.isNew() && "ALREADY_UP_TO_DATE".equals(outcome)) {
+                        outcome = "ATTACHED_EXISTING";
+                    }
+                    Repository updatedRepo = repoService.requireOwned(repo.getId(), userId);
+                    results.add(new prosno.backend.dto.ConnectBatchResponse.ConnectBatchItemResult(
+                            item.githubRepoId(), item.fullName(), true, repoService.toResponse(updatedRepo), outcome, null));
+                } catch (Exception ex) {
+                    results.add(new prosno.backend.dto.ConnectBatchResponse.ConnectBatchItemResult(
+                            item.githubRepoId(), item.fullName(), false, null, null, ex.getMessage()));
+                }
+            }
+        }
+        return ResponseEntity.ok(new prosno.backend.dto.ConnectBatchResponse(results));
+    }
+
+    @org.springframework.web.bind.annotation.DeleteMapping("/{id}")
+    public ResponseEntity<Void> disconnect(@PathVariable UUID id) {
+        UUID userId = currentUser.require().getId();
+        repoService.disconnectRepo(userId, id);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/{id}")
