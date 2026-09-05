@@ -24,7 +24,12 @@ public class HfEmbeddingModel extends AbstractEmbeddingModel {
 
     public HfEmbeddingModel(
             @Value("${HUGGINGFACE_API_KEY:mock_key}") String apiKey) {
+        org.springframework.http.client.SimpleClientHttpRequestFactory requestFactory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(java.time.Duration.ofSeconds(15));
+        requestFactory.setReadTimeout(java.time.Duration.ofSeconds(45));
+
         this.restClient = RestClient.builder()
+                .requestFactory(requestFactory)
                 .baseUrl("https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction")
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, "application/json")
@@ -37,6 +42,13 @@ public class HfEmbeddingModel extends AbstractEmbeddingModel {
         List<List<Double>> response = restClient.post()
                 .body(body)
                 .retrieve()
+                .onStatus(status -> status.isError(), (req, res) -> {
+                    String err = "";
+                    try {
+                        err = new String(res.getBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                    } catch (Exception ignored) {}
+                    throw new RuntimeException("Hugging Face API error (" + res.getStatusCode() + "): " + err);
+                })
                 .body(new ParameterizedTypeReference<List<List<Double>>>() {});
 
         if (response == null) {

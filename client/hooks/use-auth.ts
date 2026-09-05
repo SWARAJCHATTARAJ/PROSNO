@@ -22,7 +22,11 @@ export function useLogout() {
   return useMutation({
     mutationFn: api.logout,
     onSuccess: () => {
-      queryClient.removeQueries({ queryKey: queryKeys.auth.all });
+      queryClient.clear();
+      router.replace("/login");
+    },
+    onError: () => {
+      queryClient.clear();
       router.replace("/login");
     },
   });

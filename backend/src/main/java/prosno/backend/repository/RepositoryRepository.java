@@ -23,7 +23,7 @@ public interface RepositoryRepository extends JpaRepository<Repository, UUID> {
     @Query("SELECT r FROM Repository r WHERE r.id = :id")
     Optional<Repository> findByIdWithLock(@Param("id") UUID id);
 
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Repository r SET r.indexStatus = :indexing, r.expiredAt = null, r.filesProcessed = 0, r.filesTotal = 0, r.chunkCount = 0, r.errorMessage = null, r.updatedAt = CURRENT_TIMESTAMP WHERE r.id = :id AND r.indexStatus IN (:pending, :failed, :ready, :expired)")
     int tryStartJob(
         @Param("id") UUID id, 

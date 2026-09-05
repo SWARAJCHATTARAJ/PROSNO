@@ -2,16 +2,18 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, type Repository } from "@/lib/api";
+import { api, type Repository, type ConnectRepoRequest, type ConnectBatchRequest } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/components/ui/toast";
-
-
 
 const INDEXING_POLL_MS = 2000;
 
 function hasIndexingRepos(repos: Repository[] | undefined) {
-  return repos?.some((repo) => repo.indexStatus === "INDEXING") ?? false;
+  return (
+    repos?.some(
+      (repo) => repo.indexStatus === "INDEXING" || repo.indexStatus === "PENDING"
+    ) ?? false
+  );
 }
 
 function updateRepoInListCache(
@@ -27,16 +29,117 @@ function updateRepoInListCache(
 export function useRepos() {
   return useQuery({
     queryKey: queryKeys.repos.list(),
-    queryFn: async () => {
-      const repos = await api.listRepos(false);
-      if (repos.length === 0) {
-        return api.listRepos(true);
-      }
-      return repos;
-    },
+    queryFn: () => api.listRepos(false),
     staleTime: 30_000,
     refetchInterval: (query) =>
       hasIndexingRepos(query.state.data) ? INDEXING_POLL_MS : false,
+  });
+}
+
+export function useGithubRepos(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.repos.github(),
+    queryFn: () => api.listGithubRepos(),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+export function useConnectRepo() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (req: ConnectRepoRequest) => api.connectRepo(req),
+    onSuccess: (data) => {
+      const repo = data.repository;
+      queryClient.setQueryData<Repository[]>(queryKeys.repos.list(), (old) => {
+        if (!old) return [repo];
+        const exists = old.find((r) => r.id === repo.id);
+        if (exists) return old.map((r) => (r.id === repo.id ? repo : r));
+        return [repo, ...old];
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.repos.list() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.repos.github() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.repos.detail(repo.id) });
+      toast.add({
+        title: "Repository connected",
+        description: `Connected ${repo.fullName}. Indexing started…`,
+        type: "success",
+      });
+    },
+    onError: (error: Error) => {
+      toast.add({
+        title: "Could not connect repository",
+        description: error.message || "Failed to connect repository",
+        type: "error",
+      });
+    },
+  });
+}
+
+export function useConnectBatch() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (req: ConnectBatchRequest) => api.connectBatch(req),
+    onSuccess: (data) => {
+      const successful = data.results.filter((r) => r.success);
+      const failed = data.results.filter((r) => !r.success);
+
+      void queryClient.invalidateQueries({ queryKey: queryKeys.repos.list() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.repos.github() });
+
+      if (successful.length > 0) {
+        toast.add({
+          title: "Repositories connected",
+          description: `Connected ${successful.length} repository${successful.length !== 1 ? "ies" : ""}.`,
+          type: "success",
+        });
+      }
+      if (failed.length > 0) {
+        toast.add({
+          title: "Some connections failed",
+          description: `${failed.length} repository${failed.length !== 1 ? "ies" : ""} could not be connected.`,
+          type: "warning",
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast.add({
+        title: "Batch connection failed",
+        description: error.message || "Failed to connect repositories",
+        type: "error",
+      });
+    },
+  });
+}
+
+export function useDisconnectRepo() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (repoId: string) => api.disconnectRepo(repoId),
+    onSuccess: (_, repoId) => {
+      queryClient.setQueryData<Repository[]>(queryKeys.repos.list(), (old) => {
+        if (!old) return [];
+        return old.filter((r) => r.id !== repoId);
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.repos.list() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.repos.github() });
+      void queryClient.removeQueries({ queryKey: queryKeys.repos.detail(repoId) });
+      toast.add({
+        title: "Repository removed",
+        description: "Repository disconnected from your workspace",
+        type: "info",
+      });
+    },
+    onError: (error: Error) => {
+      toast.add({
+        title: "Could not remove repository",
+        description: error.message || "Failed to disconnect repository",
+        type: "error",
+      });
+    },
   });
 }
 
@@ -45,8 +148,12 @@ export function useRepository(repoId: string) {
     queryKey: queryKeys.repos.detail(repoId),
     queryFn: () => api.getRepo(repoId),
     enabled: Boolean(repoId),
-    refetchInterval: (query) =>
-      query.state.data?.indexStatus === "INDEXING" ? INDEXING_POLL_MS : false,
+    refetchInterval: (query) => {
+      const status = query.state.data?.indexStatus;
+      return status === "INDEXING" || status === "PENDING"
+        ? INDEXING_POLL_MS
+        : false;
+    },
   });
 }
 
@@ -55,8 +162,10 @@ export function useIndexStatus(repoId: string, enabled = false) {
     queryKey: queryKeys.repos.status(repoId),
     queryFn: () => api.indexStatus(repoId),
     enabled: Boolean(repoId) && enabled,
-    refetchInterval: (query) =>
-      query.state.data?.indexStatus === "INDEXING" ? 1500 : false,
+    refetchInterval: (query) => {
+      const status = query.state.data?.indexStatus;
+      return status === "INDEXING" || status === "PENDING" ? 1500 : false;
+    },
   });
 }
 
@@ -71,6 +180,12 @@ export function useStartIndexing() {
       updateRepoInListCache(queryClient, repo);
       void queryClient.invalidateQueries({
         queryKey: queryKeys.repos.status(repo.id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.repos.detail(repo.id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.repos.list(),
       });
       toast.add({
         title: "Indexing started",

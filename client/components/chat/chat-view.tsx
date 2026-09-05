@@ -17,29 +17,44 @@ import {
  useCreateChatSession,
  useStreamChat,
 } from "@/hooks/use-chat";
-import { useIndexStatus, useRepository } from "@/hooks/use-repos";
+import { useIndexStatus, useRepository, useStartIndexing } from "@/hooks/use-repos";
 import { useWorkspace } from "@/components/layout/workspace-context";
 
 export function ChatView({ repoId }: { repoId: string }) {
- const repoQuery = useRepository(repoId);
- const isIndexing = repoQuery.data?.indexStatus === "INDEXING";
- const statusQuery = useIndexStatus(
- repoId,
- isIndexing || repoQuery.data?.indexStatus === "PENDING"
- );
+  const repoQuery = useRepository(repoId);
+  const isIndexing = repoQuery.data?.indexStatus === "INDEXING";
+  const isPending = repoQuery.data?.indexStatus === "PENDING";
+  const statusQuery = useIndexStatus(
+    repoId,
+    isIndexing || isPending
+  );
 
- const indexStatus =
- statusQuery.data?.indexStatus ?? repoQuery.data?.indexStatus;
- 
- // Both READY and EXPIRED states allow chatting (EXPIRED wakes up on chat)
- const canChat = indexStatus === "READY" || indexStatus === "EXPIRED";
+  const indexStatus =
+    statusQuery.data?.indexStatus ?? repoQuery.data?.indexStatus;
+  
+  // Both READY and EXPIRED states allow chatting (EXPIRED wakes up on chat)
+  const canChat = indexStatus === "READY" || indexStatus === "EXPIRED";
 
- const sessionsQuery = useChatSessions(repoId, canChat);
- const createSession = useCreateChatSession(repoId);
- const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
- null
- );
- const autoCreateRef = useRef(false);
+  const startIndexMutation = useStartIndexing();
+  const autoTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      repoQuery.data?.indexStatus === "PENDING" &&
+      !autoTriggeredRef.current &&
+      !startIndexMutation.isPending
+    ) {
+      autoTriggeredRef.current = true;
+      startIndexMutation.mutate(repoId);
+    }
+  }, [repoQuery.data?.indexStatus, repoId, startIndexMutation]);
+
+  const sessionsQuery = useChatSessions(repoId, canChat);
+  const createSession = useCreateChatSession(repoId);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    null
+  );
+  const autoCreateRef = useRef(false);
 
  const sessionId =
  selectedSessionId ?? sessionsQuery.data?.[0]?.id ?? null;

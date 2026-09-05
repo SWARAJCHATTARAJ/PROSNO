@@ -11,6 +11,7 @@ import { useWorkspace } from "./workspace-context";
 import { useCurrentUser, useLogout } from "@/hooks/use-auth";
 import type { IndexStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { ConnectRepoModal } from "@/components/dashboard/connect-repo-modal";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -114,15 +115,18 @@ export function WorkspaceSidebar({ sessionId, onSelectSession }: { sessionId?: s
             </SidebarMenu>
           </SidebarGroupContent>
           <div className="px-2 mt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start text-xs font-mono text-muted-foreground border-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              onClick={() => router.push("/dashboard")}
-            >
-              <Plus className="size-3.5 mr-2" />
-              Connect repository
-            </Button>
+            <ConnectRepoModal
+              trigger={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start text-xs font-mono text-muted-foreground border-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                >
+                  <Plus className="size-3.5 mr-2" />
+                  Connect repository
+                </Button>
+              }
+            />
           </div>
         </SidebarGroup>
 

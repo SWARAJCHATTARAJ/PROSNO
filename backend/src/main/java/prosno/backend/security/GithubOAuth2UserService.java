@@ -1,5 +1,7 @@
 package prosno.backend.security;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
@@ -14,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class GithubOAuth2UserService implements OAuth2UserService<OAuth2UserRequest, OAuth2User> {
+    private static final Logger log = LoggerFactory.getLogger(GithubOAuth2UserService.class);
     private final UserService userService;
     private final DefaultOAuth2UserService delegate = new DefaultOAuth2UserService();
 
@@ -27,6 +30,7 @@ public class GithubOAuth2UserService implements OAuth2UserService<OAuth2UserRequ
                 : "read:user,repo";
 
         User user = userService.upsertFromGitHub(githubUser.getAttributes(), accessToken, scopes);
+        log.info("OAuth2 user loaded: githubId={}, username={}, userId={}", user.getGithubId(), user.getGithubUsername(), user.getId());
         return new AppUserPrincipal(user, githubUser.getAttributes());
     }
 }

@@ -6,6 +6,7 @@ export const queryKeys = {
   repos: {
     all: ["repos"] as const,
     list: () => [...queryKeys.repos.all, "list"] as const,
+    github: () => [...queryKeys.repos.all, "github"] as const,
     detail: (id: string) => [...queryKeys.repos.all, "detail", id] as const,
     status: (id: string) => [...queryKeys.repos.all, "status", id] as const,
   },

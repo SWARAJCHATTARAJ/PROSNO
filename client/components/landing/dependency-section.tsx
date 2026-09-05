@@ -1,6 +1,5 @@
 "use client";
 
-import { Network } from "lucide-react";
 
 export function DependencySection() {
   return (

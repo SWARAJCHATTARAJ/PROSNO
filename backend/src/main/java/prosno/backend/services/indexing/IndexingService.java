@@ -92,15 +92,27 @@ public class IndexingService {
 
     @Async("indexingExecutor")
     public void indexAsync(UUID repoId, UUID userId) {
+        long startTime = System.currentTimeMillis();
+        log.info("Indexing async task started - repoId: {}, userId: {}", repoId, userId);
         try {
             doIndex(repoId, userId);
-        } catch (Exception ex) {
-            log.error("Indexing failed for repo {}", repoId, ex);
+        } catch (Throwable ex) {
+            long duration = System.currentTimeMillis() - startTime;
+            String safeMsg = sanitizeErrorMessage(ex.getMessage());
+            log.error("Indexing failed for repoId: {} after {}ms: {}", repoId, duration, safeMsg, ex);
             
-            log.info("Cleaning up partial vectors for failed repo {}", repoId);
-            deleteExistingVectors(repoId.toString());
+            try {
+                log.info("Cleaning up partial vectors for failed repoId: {}", repoId);
+                deleteExistingVectors(repoId.toString());
+            } catch (Throwable cleanupEx) {
+                log.warn("Failed to clean up vectors for repoId {}: {}", repoId, cleanupEx.getMessage());
+            }
             
-            markFailed(repoId, ex.getMessage());
+            try {
+                markFailed(repoId, safeMsg);
+            } catch (Throwable markEx) {
+                log.error("FATAL: Could not mark repoId {} as FAILED: {}", repoId, markEx.getMessage(), markEx);
+            }
         }
     }
 
@@ -109,21 +121,26 @@ public class IndexingService {
         Repository repo = repositoryRepository.findById(repoId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
         
-        log.info("STARTED_INDEXING - repoId: {}", repoId);
+        log.info("STAGE 1 [METADATA]: Fetching repository metadata for {} ({})", repo.getFullName(), repoId);
 
         String token = userService.decryptAccessToken(userService.requiredById(userId));
         
         String targetSha = gitHubApiClient.getLatestCommitSha(token, repo.getOwner(), repo.getName(), repo.getDefaultBranch());
+        log.info("STAGE 1 [METADATA]: Target commit SHA for {}: {}", repo.getFullName(), targetSha);
 
+        log.info("STAGE 2 [CLEANUP]: Deleting existing vectors for repoId: {}", repoId);
         deleteExistingVectors(repoId.toString());
 
+        log.info("STAGE 3 [DOWNLOAD]: Downloading repo zip from GitHub for {} (branch: {})", repo.getFullName(), repo.getDefaultBranch());
         byte[] zipBytes = gitHubApiClient.downloadRepoZip(
                 token, repo.getOwner(), repo.getName(), repo.getDefaultBranch());
                 
-        if (zipBytes == null) {
-            throw new RuntimeException("Failed to download repo zip: received null from GitHub");
+        if (zipBytes == null || zipBytes.length == 0) {
+            throw new RuntimeException("Failed to download repo zip: received empty response from GitHub");
         }
+        log.info("STAGE 3 [DOWNLOAD]: Downloaded {} bytes of repo zip for {}", zipBytes.length, repo.getFullName());
 
+        log.info("STAGE 4 [SCAN]: Scanning zip archive for eligible files in {}", repo.getFullName());
         int totalFiles = 0;
         try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(zipBytes))) {
             java.util.zip.ZipEntry entry;
@@ -132,21 +149,30 @@ public class IndexingService {
                 String path = entry.getName();
                 int firstSlash = path.indexOf('/');
                 if (firstSlash >= 0) path = path.substring(firstSlash + 1);
-                // Uncompressed size might be -1 if unknown in ZIP header, but usually present. If -1, we pass 0 and let filter handle it.
                 long size = entry.getSize() != -1 ? entry.getSize() : 0;
                 if (fileFilter.isEligible(path, size, maxFileBytes)) {
                     totalFiles++;
                 }
             }
         } catch (Exception ex) {
-            throw new RuntimeException("Failed to parse repo zip", ex);
+            throw new RuntimeException("Failed to scan repository zip: " + ex.getMessage(), ex);
         }
 
+        log.info("STAGE 4 [SCAN]: Found {} eligible files in {}", totalFiles, repo.getFullName());
         updateProgress(repoId, totalFiles, 0, 0, IndexStatus.INDEXING, null);
+
+        if (totalFiles == 0) {
+            log.warn("Repository {} contains no eligible code files to index", repo.getFullName());
+            markReady(repoId, 0, 0, 0, repo.getFullName(), targetSha);
+            log.info("INDEXING_COMPLETED [EMPTY] - repoId: {}, durationMs: {}", repoId, (System.currentTimeMillis() - t0));
+            return;
+        }
 
         List<Document> batch = new ArrayList<>();
         int processed = 0;
         int totalChunks = 0;
+
+        log.info("STAGE 5 [CHUNKING & EMBEDDINGS]: Processing files and creating embeddings for {}", repo.getFullName());
 
         try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(zipBytes))) {
             java.util.zip.ZipEntry entry;
@@ -190,13 +216,8 @@ public class IndexingService {
                         batch.add(chunk);
                         totalChunks++;
                         if (batch.size() >= VECTOR_BATCH_SIZE) {
-                            try {
-                                vectorStore.add(batch);
-                            } catch (Exception e) {
-                                log.warn("Failed to add vector batch for {}: {}", repo.getFullName(), e.getMessage());
-                            } finally {
-                                batch.clear(); // Always clear to prevent OOM
-                            }
+                            insertVectorBatch(repo.getFullName(), batch);
+                            batch.clear();
                         }
                     }
                 } catch (Exception ex) {
@@ -209,22 +230,29 @@ public class IndexingService {
                 }
             }
         } catch (Exception ex) {
-            throw new RuntimeException("Failed to extract repo zip", ex);
+            throw new RuntimeException("Failed to extract and process repo zip: " + ex.getMessage(), ex);
         }
 
         if (!batch.isEmpty()) {
-            try {
-                vectorStore.add(batch);
-            } catch (Exception e) {
-                log.warn("Failed to add final vector batch for {}: {}", repo.getFullName(), e.getMessage());
-            } finally {
-                batch.clear();
-            }
+            insertVectorBatch(repo.getFullName(), batch);
+            batch.clear();
         }
 
         markReady(repoId, totalFiles, processed, totalChunks, repo.getFullName(), targetSha);
-        log.info("INDEXING_COMPLETED - repoId: {}, filesProcessed: {}, totalChunks: {}, durationMs: {}", 
-            repoId, processed, totalChunks, (System.currentTimeMillis() - t0));
+        log.info("STAGE 6 [COMPLETED]: repoId: {}, filesProcessed: {}/{}, totalChunks: {}, durationMs: {}", 
+            repoId, processed, totalFiles, totalChunks, (System.currentTimeMillis() - t0));
+    }
+
+    private void insertVectorBatch(String repoFullName, List<Document> batch) {
+        log.info("Generating embeddings and inserting {} vectors for {}", batch.size(), repoFullName);
+        long t = System.currentTimeMillis();
+        try {
+            vectorStore.add(batch);
+            log.info("Successfully inserted {} vectors for {} in {}ms", batch.size(), repoFullName, (System.currentTimeMillis() - t));
+        } catch (Exception e) {
+            log.error("Failed to add vector batch for {}: {}", repoFullName, e.getMessage(), e);
+            throw new RuntimeException("Vector store insertion failed: " + sanitizeErrorMessage(e.getMessage()), e);
+        }
     }
 
     private void deleteExistingVectors(String repoId) {
@@ -234,10 +262,10 @@ public class IndexingService {
         } catch (Exception ex) {
             log.warn("Could not delete existing vectors for repo {}: {}", repoId, ex.getMessage());
         }
-    };
+    }
 
     @Transactional
-    protected void updateProgress(
+    public void updateProgress(
             UUID repoId,
             int total,
             int processed,
@@ -251,12 +279,12 @@ public class IndexingService {
             repo.setIndexStatus(status);
             repo.setErrorMessage(error);
             repo.setUpdatedAt(Instant.now());
-            repositoryRepository.save(repo);
+            repositoryRepository.saveAndFlush(repo);
         });
     }
 
     @Transactional
-    protected void markReady(UUID repoId, int totalFiles, int processedFiles, int totalChunks, String fullName, String targetSha) {
+    public void markReady(UUID repoId, int totalFiles, int processedFiles, int totalChunks, String fullName, String targetSha) {
         repositoryRepository.findById(repoId).ifPresent(repo -> {
             repo.setIndexStatus(IndexStatus.READY);
             repo.setFilesTotal(totalFiles);
@@ -266,21 +294,38 @@ public class IndexingService {
             repo.setLastIndexedSha(targetSha);
             repo.setErrorMessage(null);
             repo.setUpdatedAt(Instant.now());
-            repositoryRepository.save(repo);
+            repositoryRepository.saveAndFlush(repo);
         });
         log.info("Indexed {} files ({} chunks) for {}", processedFiles, totalChunks, fullName);
     }
 
     @Transactional
-    protected void markFailed(UUID repoId, String message) {
+    public void markFailed(UUID repoId, String message) {
         repositoryRepository.findById(repoId).ifPresent(repo -> {
             repo.setIndexStatus(IndexStatus.FAILED);
-            repo.setErrorMessage(message != null && message.length() > 2000
-                    ? message.substring(0, 2000)
-                    : message);
+            String safeMsg = sanitizeErrorMessage(message);
+            repo.setErrorMessage(safeMsg != null && safeMsg.length() > 2000
+                    ? safeMsg.substring(0, 2000)
+                    : safeMsg);
             repo.setUpdatedAt(Instant.now());
-            repositoryRepository.save(repo);
+            repositoryRepository.saveAndFlush(repo);
         });
+        log.warn("Marked repo {} as FAILED: {}", repoId, sanitizeErrorMessage(message));
+    }
+
+    private String sanitizeErrorMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return "Unknown indexing error occurred.";
+        }
+        String clean = message
+            .replaceAll("(?i)bearer\\s+[a-zA-Z0-9_\\-\\.]+", "Bearer [REDACTED]")
+            .replaceAll("(?i)(gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{22,})", "[REDACTED_TOKEN]")
+            .replaceAll("(?i)hf_[A-Za-z0-9]{16,}", "[REDACTED_TOKEN]")
+            .replaceAll("(?i)(token|key|secret|password|auth)=([^& \\s]+)", "$1=[REDACTED]");
+        if (clean.length() > 2000) {
+            clean = clean.substring(0, 2000);
+        }
+        return clean;
     }
 
     @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
@@ -292,7 +337,7 @@ public class IndexingService {
             repo.setIndexStatus(IndexStatus.FAILED);
             repo.setErrorMessage("Indexing was interrupted because the server restarted.");
             repo.setUpdatedAt(Instant.now());
-            repositoryRepository.save(repo);
+            repositoryRepository.saveAndFlush(repo);
         }
     }
 
