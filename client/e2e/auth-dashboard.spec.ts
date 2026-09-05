@@ -57,18 +57,27 @@ test.describe('Dashboard and Repository States', () => {
         ], headers });
       }
 
-      if (url.includes('/messages') && method === 'GET') {
-        if (url.includes('session-456')) {
-          return route.fulfill({
-            headers: { ...headers, 'Content-Type': 'text/event-stream' },
-            body: 'event: token\ndata: "```python\\n"\n\nevent: token\ndata: "print(\\"hello\\")\\n"\n\nevent: token\ndata: "```"\n\nevent: assistant_message\ndata: {"id": "msg-2", "role": "ASSISTANT", "content": "```python\\nprint(\\"hello\\")\\n```", "citations": []}\n\n'
-          });
+      if (url.includes('/api/auth/csrf')) {
+        return route.fulfill({ json: { token: 'mock-csrf-token', headerName: 'X-XSRF-TOKEN' }, headers });
+      }
+
+      if (url.includes('/messages')) {
+        if (method === 'GET') {
+          return route.fulfill({ json: [], headers });
         }
-        if (url.includes('session-123')) {
-          return route.fulfill({
-            headers: { ...headers, 'Content-Type': 'text/event-stream' },
-            body: 'event: token\ndata: "Hello World"\n\nevent: assistant_message\ndata: {"id":"msg-1","role":"ASSISTANT","content":"Hello World","citations":[{"filePath":"src/main.ts","startLine":1,"endLine":1}]}\n\n'
-          });
+        if (method === 'POST') {
+          if (url.includes('session-456')) {
+            return route.fulfill({
+              headers: { ...headers, 'Content-Type': 'text/event-stream' },
+              body: 'event: token\ndata:```python\n\nevent: token\ndata:print("hello")\n\nevent: token\ndata:```\n\nevent: assistant_message\ndata: {"id": "msg-2", "role": "ASSISTANT", "content": "```python\\nprint(\\"hello\\")\\n```", "citations": []}\n\nevent: done\ndata: [DONE]\n\n'
+            });
+          }
+          if (url.includes('session-123')) {
+            return route.fulfill({
+              headers: { ...headers, 'Content-Type': 'text/event-stream' },
+              body: 'event: token\ndata: Hello World\n\nevent: assistant_message\ndata: {"id":"msg-1","role":"ASSISTANT","content":"Hello World","citations":[{"filePath":"src/main.ts","startLine":1,"endLine":1}]}\n\nevent: done\ndata: [DONE]\n\n'
+            });
+          }
         }
       }
 
@@ -91,7 +100,7 @@ test.describe('Dashboard and Repository States', () => {
 
   test('verifies dashboard renders empty state and sidebar', async ({ page }) => {
     await page.goto('/dashboard');
-    await expect(page.locator('text=ASK YOUR CODEBASE')).toBeVisible();
+    await expect(page.locator('text=~/workspaces')).toBeVisible();
   });
 
   test('verifies chat interface and EXPIRED wake-up flow', async ({ page }) => {
